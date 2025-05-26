@@ -1,0 +1,74 @@
+#include <raylib.h>
+#include <math.h>
+#include <rlgl.h>
+
+typedef struct {
+    Vector3 position;
+    float yaw;
+    float pitch;  
+    Camera3D camera;
+} MouseCamera;
+
+Color podstawka = {255,220,0,255};
+void InitMouseCamera(MouseCamera *mc, Vector3 pos) {
+    mc->position = pos;
+    mc->yaw = 45.0f;  
+    mc->pitch = 0.0f;
+
+    mc->camera.position = pos;
+    mc->camera.target = (Vector3){0, 0, 0};
+    mc->camera.up = (Vector3){0, 1, 0};
+    mc->camera.fovy = 45.0f;
+    mc->camera.projection = CAMERA_PERSPECTIVE;
+
+    SetMousePosition(GetScreenWidth() / 2, GetScreenHeight() / 2);
+    DisableCursor();
+}
+void UpdateMouseCamera(MouseCamera *mc) {
+    Vector2 mousePos = GetMousePosition();
+    Vector2 mouseDelta = { mousePos.x - GetScreenWidth() / 2, mousePos.y - GetScreenHeight() / 2 };
+
+    const float sensitivity = 0.2f;
+    mc->yaw += mouseDelta.x * sensitivity;
+    mc->pitch -= mouseDelta.y * sensitivity;
+
+    if (mc->pitch > 89.0f) mc->pitch = 89.0f;
+    if (mc->pitch < -89.0f) mc->pitch = -89.0f;
+
+    SetMousePosition(GetScreenWidth() / 2, GetScreenHeight() / 2);
+
+    float radYaw = mc->yaw * (PI / 180.0f);
+    float radPitch = mc->pitch * (PI / 180.0f);
+
+    mc->camera.position = mc->position;
+    mc->camera.target.x = mc->position.x + cosf(radPitch) * cosf(radYaw);
+    mc->camera.target.y = mc->position.y + sinf(radPitch);
+    mc->camera.target.z = mc->position.z + cosf(radPitch) * sinf(radYaw);
+    mc->camera.up = (Vector3){0, 1, 0};
+}
+
+int main() {
+    InitWindow(800, 800, "robot");
+    SetTargetFPS(60);
+
+    MouseCamera myCam;
+    InitMouseCamera(&myCam, (Vector3){4.0f, 2.0f, 4.0f});
+
+    while (!WindowShouldClose()) {
+        UpdateMouseCamera(&myCam);
+
+        BeginDrawing();
+            ClearBackground(RAYWHITE);
+
+            BeginMode3D(myCam.camera);
+                DrawGrid(20, 1.0f);
+                DrawCylinder((Vector3){0,0,0},0.5,0.5,0.1,48,podstawka);
+            EndMode3D();
+
+        EndDrawing();
+    }
+
+    EnableCursor();
+    CloseWindow();
+    return 0;
+}
