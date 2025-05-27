@@ -9,7 +9,8 @@ typedef struct {
     Camera3D camera;
 } MouseCamera;
 
-Color podstawka = {255,220,0,255};
+Color podstawka = {123,130,122,255};
+Color dolnyprzegub = {254,238,0,255};
 void InitMouseCamera(MouseCamera *mc, Vector3 pos) {
     mc->position = pos;
     mc->yaw = 45.0f;  
@@ -46,6 +47,27 @@ void UpdateMouseCamera(MouseCamera *mc) {
     mc->camera.target.z = mc->position.z + cosf(radPitch) * sinf(radYaw);
     mc->camera.up = (Vector3){0, 1, 0};
 }
+#include <math.h>
+#include <raylib.h>
+
+void DrawCylinderWireframe(Vector3 pos, float radius, float height, int slices, Color color) {
+    for (int i = 0; i < slices; i++) {
+        float angle1 = 2*PI*i/slices;
+        float angle2 = 2*PI*(i+1)/slices;
+
+        Vector3 p1 = {pos.x + radius*cosf(angle1), pos.y,           pos.z + radius*sinf(angle1)};
+        Vector3 p2 = {pos.x + radius*cosf(angle2), pos.y,           pos.z + radius*sinf(angle2)};
+        Vector3 p3 = {pos.x + radius*cosf(angle1), pos.y + height,  pos.z + radius*sinf(angle1)};
+        Vector3 p4 = {pos.x + radius*cosf(angle2), pos.y + height,  pos.z + radius*sinf(angle2)};
+
+        // linia dolna (podstawa)
+        DrawLine3D(p1, p2, color);
+        // linia górna (pokrywa)
+        DrawLine3D(p3, p4, color);
+        // linia pionowa (boczna krawędź)
+        DrawLine3D(p1, p3, color);
+    }
+}
 
 int main() {
     InitWindow(800, 800, "robot");
@@ -63,6 +85,10 @@ int main() {
             BeginMode3D(myCam.camera);
                 DrawGrid(20, 1.0f);
                 DrawCylinder((Vector3){0,0,0},0.5,0.5,0.1,48,podstawka);
+                DrawCylinderWireframe((Vector3){0,0,0},0.5,0.1,48,BLACK);
+                DrawCylinder((Vector3){0,0.1,0},0.35,0.35,0.1,48,podstawka);
+                DrawCylinderWireframe((Vector3){0,0.1,0},0.35,0.1,48,BLACK);
+                DrawCylinder((Vector3){0,0.2,0},0.1,0.25,0.32,48,dolnyprzegub);
             EndMode3D();
 
         EndDrawing();
