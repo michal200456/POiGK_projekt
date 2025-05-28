@@ -4,6 +4,9 @@
 #include <math.h>
 #include <memory>
 
+#define RAYGUI_IMPLEMENTATION
+#include "external/raylib/raygui.h"
+
 typedef struct {
     const char* objFile;
     Vector3 attachmentPoint;
@@ -66,6 +69,18 @@ public:
 
 int main() {
     InitWindow(800, 800, "robot");
+
+    // layout_name: controls initialization
+    //----------------------------------------------------------------------------------
+    bool DropdownBox000EditMode = false;
+    int DropdownBox000Active = 0;
+    bool TextBox001EditMode = false;
+    char TextBox001Text[128] = "Tryb:";
+    bool DropdownBox002EditMode = false;
+    int DropdownBox002Active = 0;
+    bool Button003Pressed = false;
+    //----------------------------------------------------------------------------------
+
     SetTargetFPS(60);
 
     clCamera CamInstance({ 4.0f, 2.0f, 4.0f });
@@ -80,6 +95,18 @@ int main() {
             DrawGrid(20, 1.0f);
             robot.Draw();
             EndMode3D();
+
+            // raygui: controls drawing
+            //----------------------------------------------------------------------------------
+            if (DropdownBox000EditMode || DropdownBox002EditMode) GuiLock();
+
+            if (GuiTextBox({ 144, 0, 40, 24 }, TextBox001Text, 128, TextBox001EditMode)) TextBox001EditMode = !TextBox001EditMode;
+            Button003Pressed = GuiButton({ 640, 0, 160, 24 }, "Wlacz tryb uczenia/pracy"); 
+            if (GuiDropdownBox({ 0, 0, 120, 24 }, "Typ robota;TWO;THREE", &DropdownBox000Active, DropdownBox000EditMode)) DropdownBox000EditMode = !DropdownBox000EditMode;
+            if (GuiDropdownBox({ 184, 0, 152, 24 }, "Sterowanie zlaczami;Polozenie koncowe", &DropdownBox002Active, DropdownBox002EditMode)) DropdownBox002EditMode = !DropdownBox002EditMode;
+            
+            GuiUnlock();
+            //----------------------------------------------------------------------------------
 
         EndDrawing();
     }
