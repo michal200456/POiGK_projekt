@@ -1,16 +1,27 @@
+/*
+TODO:
+-poprawić sterowanie kamerą(np. na podobne jak w Blenderze)
+-poprawić wczytywanie modelu robota
+-dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
+-dodać sterowanie
+    -poszczególnymi złączami
+    -do wpisanych koordynatów
+-dodać animacje przemieszczania do nowej pozycji
+-dodać tryby uczenia i pracy
+-dodać kolizje
+-dodać interakcje z elemnetem otoczenia
+-dodać oświetlenie
+-GUI
+Opcjonalnie:
+-więcej modeli robotów(cylindryczny, polarny, itp.)
+-model rzeczywistego robota
+*/
 #include <raylib.h>
 #include <raymath.h>
 #include <rlgl.h>
 #include <math.h>
 #include <memory>
-
-#define RAYGUI_IMPLEMENTATION
-#include "external/raylib/raygui.h"
-
-typedef struct {
-    const char* objFile;
-    Vector3 attachmentPoint;
-} ObjInfo;
+#include <vector>
 
 class clCamera {
     public:
@@ -28,58 +39,58 @@ class clCamera {
 
 class Segment {
 public:
-    Segment(Vector3 Position, Vector3 Orientation, ObjInfo o ) {
-        position = Position;
-        orientation = Orientation;
-        model = LoadModel(o.objFile);
-        attachmentPoint = o.attachmentPoint;
+    Segment(Model m, int mesh) {
+        model.materialCount = 1;
+        model.transform = m.transform;
+        model.meshCount = 1;
+        model.meshes = (Mesh*)RL_CALLOC(model.meshCount, sizeof(Mesh));
+        model.meshMaterial = (int*)RL_CALLOC(model.meshCount, sizeof(int));
+        model.materials = (Material*)RL_CALLOC(model.materialCount, sizeof(Material));
+        model.meshMaterial[0] = 0;
+        model.meshes[0] = m.meshes[mesh];
+        model.materials[0] = m.materials[mesh];
+    }
+    Segment(const char* fileName) {
+        model = LoadModel(fileName);
     }
     ~Segment() {
         UnloadModel(model);
     }
     void Draw() {
-        DrawModel(model, position, 1.f, WHITE);
-        DrawModelWires(model, position, 1.f, BLACK);
+        DrawModel(model, Vector3Zero(), 1.f, WHITE);
+        DrawModelWires(model, Vector3Zero(), 1.f, BLACK);
     }
-    Vector3 position;
-    Vector3 orientation;
-    Vector3 attachmentPoint;
     Model model;
 };
 
-const ObjInfo Iplatform = {"platform.obj",{0.f,1.f,0.f}};
-const ObjInfo Isegment = {"segment.obj",{0.f,2.f,0.f}};
 class RobotArm {
 public:
+    RobotArm(const char* fileName) {
+        Model model = LoadModel(fileName);
+        segments.resize(static_cast<size_t>(model.meshCount));
+        for (int i = 0; i < model.meshCount; i++) {
+            segments[i] = std::make_unique<Segment>(model, i);
+        }
+        UnloadModel(model);
+    }
     RobotArm() {
-        Vector3 cPos = Vector3Zero();
-        segments[0] = std::make_unique<Segment>(cPos, cPos, Iplatform);
-        for (int i = 1;i < 4;i++) {
-            cPos = Vector3Add(cPos, segments[i - 1]->attachmentPoint);
-            segments[i] = std::make_unique<Segment>(cPos, Vector3Zero(), Isegment);
+        segments.resize(4);
+        for (int i = 0; i < 4; i++) {
+            char buffer[32];
+            snprintf(buffer, 32, "models/robot1/%d.obj", i + 1);
+            segments[i] = std::make_unique<Segment>(buffer);
         }
     }
     void Draw() {
-        for (int i = 0;i < 4;i++) {
+        for (int i = 0; i < static_cast<int>(segments.size()); i++) {
             segments[i]->Draw();
         } 
     }
-    std::unique_ptr<Segment> segments[4];
+    std::vector<std::unique_ptr<Segment>> segments;
 };
 
 int main() {
     InitWindow(800, 800, "robot");
-
-    // layout_name: controls initialization
-    //----------------------------------------------------------------------------------
-    bool DropdownBox000EditMode = false;
-    int DropdownBox000Active = 0;
-    bool TextBox001EditMode = false;
-    char TextBox001Text[128] = "Tryb:";
-    bool DropdownBox002EditMode = false;
-    int DropdownBox002Active = 0;
-    bool Button003Pressed = false;
-    //----------------------------------------------------------------------------------
 
     SetTargetFPS(60);
 
@@ -96,20 +107,9 @@ int main() {
             robot.Draw();
             EndMode3D();
 
-            // raygui: controls drawing
-            //----------------------------------------------------------------------------------
-            if (DropdownBox000EditMode || DropdownBox002EditMode) GuiLock();
-
-            if (GuiTextBox({ 144, 0, 40, 24 }, TextBox001Text, 128, TextBox001EditMode)) TextBox001EditMode = !TextBox001EditMode;
-            Button003Pressed = GuiButton({ 640, 0, 160, 24 }, "Wlacz tryb uczenia/pracy"); 
-            if (GuiDropdownBox({ 0, 0, 120, 24 }, "Typ robota;TWO;THREE", &DropdownBox000Active, DropdownBox000EditMode)) DropdownBox000EditMode = !DropdownBox000EditMode;
-            if (GuiDropdownBox({ 184, 0, 152, 24 }, "Sterowanie zlaczami;Polozenie koncowe", &DropdownBox002Active, DropdownBox002EditMode)) DropdownBox002EditMode = !DropdownBox002EditMode;
-            
-            GuiUnlock();
-            //----------------------------------------------------------------------------------
-
         EndDrawing();
     }
+
 
     EnableCursor();
     CloseWindow();
