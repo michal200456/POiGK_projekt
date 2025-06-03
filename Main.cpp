@@ -1,8 +1,6 @@
 /*
 TODO:
 -poprawić sterowanie kamerą(np. na podobne jak w Blenderze)
--poprawić wczytywanie modelu robota
--dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
 -dodać sterowanie
     -poszczególnymi złączami
     -do wpisanych koordynatów
@@ -13,8 +11,16 @@ TODO:
 -dodać oświetlenie
 -GUI
 Opcjonalnie:
+-dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
 -więcej modeli robotów(cylindryczny, polarny, itp.)
 -model rzeczywistego robota
+
+Sterowanie:
+= zwiększ nastawę złącza
+- zmniejsz nastawę złącza
+. wybierz kolejne złącze
+, wybierz poprzednie złącze
+
 */
 #include <raylib.h>
 #include <raymath.h>
@@ -22,6 +28,10 @@ Opcjonalnie:
 #include <math.h>
 #include <memory>
 #include <vector>
+
+Matrix MatrixTranslate(Vector3 translation) {
+    return MatrixTranslate(translation.x, translation.y, translation.z);
+}
 
 class clCamera {
     public:
@@ -37,56 +47,48 @@ class clCamera {
     Camera3D parameters;
 };
 
-class Segment {
-public:
-    Segment(Model m, int mesh) {
-        model.materialCount = 1;
-        model.transform = m.transform;
-        model.meshCount = 1;
-        model.meshes = (Mesh*)RL_CALLOC(model.meshCount, sizeof(Mesh));
-        model.meshMaterial = (int*)RL_CALLOC(model.meshCount, sizeof(int));
-        model.materials = (Material*)RL_CALLOC(model.materialCount, sizeof(Material));
-        model.meshMaterial[0] = 0;
-        model.meshes[0] = m.meshes[mesh];
-        model.materials[0] = m.materials[mesh];
-    }
-    Segment(const char* fileName) {
-        model = LoadModel(fileName);
-    }
-    ~Segment() {
-        UnloadModel(model);
-    }
-    void Draw() {
-        DrawModel(model, Vector3Zero(), 1.f, WHITE);
-        DrawModelWires(model, Vector3Zero(), 1.f, BLACK);
-    }
-    Model model;
-};
-
 class RobotArm {
 public:
     RobotArm(const char* fileName) {
-        Model model = LoadModel(fileName);
-        segments.resize(static_cast<size_t>(model.meshCount));
-        for (int i = 0; i < model.meshCount; i++) {
-            segments[i] = std::make_unique<Segment>(model, i);
+        model = LoadModel(fileName);
+        std::vector<Matrix> absoluteTransforms;
+        absoluteTransforms.resize(model.meshCount);
+        relativeTransforms.resize(model.meshCount);
+        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
+        relativeTransforms[0] = absoluteTransforms[0];
+        for (int i = 1;i < model.meshCount;i++) {
+            absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
+            relativeTransforms[i] = MatrixMultiply(MatrixInvert(absoluteTransforms[i - 1]), absoluteTransforms[i]);
         }
+    }
+    ~RobotArm() {
         UnloadModel(model);
     }
-    RobotArm() {
-        segments.resize(4);
-        for (int i = 0; i < 4; i++) {
-            char buffer[32];
-            snprintf(buffer, 32, "models/robot1/%d.obj", i + 1);
-            segments[i] = std::make_unique<Segment>(buffer);
+    void Draw(int selection) {
+        Matrix c = model.transform;
+        for (int i = 0;i < model.meshCount;i++) {
+            c = MatrixMultiply(c, relativeTransforms[i]);
+            if (i == selection) {
+                model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = YELLOW;
+            }
+            else {
+                model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+            }
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], c);
+            rlEnableWireMode();
+            model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = BLACK;
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], c);
+            rlDisableWireMode();
         }
     }
-    void Draw() {
-        for (int i = 0; i < static_cast<int>(segments.size()); i++) {
-            segments[i]->Draw();
-        } 
+    void MoveJoint(int selection, int direction) {  //WIP, teraz nie działa jak powinno, trzeba by to zrobić metodą DH
+        Matrix original = relativeTransforms[selection];
+        relativeTransforms[selection] = MatrixIdentity();
+        relativeTransforms[selection] = MatrixMultiply(relativeTransforms[selection], QuaternionToMatrix(QuaternionFromAxisAngle({ 1,0,0 }, direction * DEG2RAD * 5)));
+        relativeTransforms[selection] = MatrixMultiply(relativeTransforms[selection], original);
     }
-    std::vector<std::unique_ptr<Segment>> segments;
+    Model model;
+    std::vector<Matrix> relativeTransforms;
 };
 
 int main() {
@@ -95,21 +97,37 @@ int main() {
     SetTargetFPS(60);
 
     clCamera CamInstance({ 4.0f, 2.0f, 4.0f });
-    RobotArm robot;
+    RobotArm robot("models/robot.glb");
+
+    int selection = 0;
+    const int maxSelection=robot.model.meshCount;
 
     while (!WindowShouldClose()) {
         UpdateCamera(&CamInstance.parameters, CAMERA_FIRST_PERSON);
+        if (IsKeyPressed(KEY_PERIOD)) {
+            selection += 1;
+            selection = selection % maxSelection;
+        }
+        if (IsKeyPressed(KEY_COMMA)) {
+            selection -= 1;
+            selection = selection % maxSelection;
+        }
+        if (IsKeyPressed(KEY_EQUAL)) {
+            robot.MoveJoint(selection, 1);
+        }
+        if (IsKeyPressed(KEY_MINUS)) {
+            robot.MoveJoint(selection, -1);
+        }
         BeginDrawing();
             ClearBackground(RAYWHITE);
 
             BeginMode3D(CamInstance.parameters);
             DrawGrid(20, 1.0f);
-            robot.Draw();
+            robot.Draw(selection);
             EndMode3D();
 
         EndDrawing();
     }
-
 
     EnableCursor();
     CloseWindow();
