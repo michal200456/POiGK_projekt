@@ -1,8 +1,8 @@
 /*
+
 TODO:
 -poprawić sterowanie kamerą(np. na podobne jak w Blenderze)
 -dodać sterowanie
-    -poszczególnymi złączami
     -do wpisanych koordynatów
 -dodać animacje przemieszczania do nowej pozycji
 -dodać tryby uczenia i pracy
@@ -33,6 +33,14 @@ Matrix MatrixTranslate(Vector3 translation) {
     return MatrixTranslate(translation.x, translation.y, translation.z);
 }
 
+Matrix DHtoMatrix(Vector4 DH) {
+    Matrix result;
+    Matrix RT = MatrixMultiply(MatrixRotateX(DH.x), MatrixTranslate(DH.y, 0, 0));
+    Matrix TR = MatrixMultiply(MatrixTranslate(0, DH.z, 0), MatrixRotateY(DH.w));
+    result = MatrixMultiply(RT, TR);
+    return result;
+}
+
 class clCamera {
     public:
     clCamera(Vector3 pos) {
@@ -51,44 +59,49 @@ class RobotArm {
 public:
     RobotArm(const char* fileName) {
         model = LoadModel(fileName);
-        std::vector<Matrix> absoluteTransforms;
         absoluteTransforms.resize(model.meshCount);
-        relativeTransforms.resize(model.meshCount);
+        DHparameters.resize(model.meshCount);
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
-        relativeTransforms[0] = absoluteTransforms[0];
+        DHparameters[0].x = 0;
+        DHparameters[0].y = 0;
+        DHparameters[0].z = 0;
+        DHparameters[0].w = 0;
         for (int i = 1;i < model.meshCount;i++) {
             absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
-            relativeTransforms[i] = MatrixMultiply(MatrixInvert(absoluteTransforms[i - 1]), absoluteTransforms[i]);
+            DHparameters[i].x = 0;
+            DHparameters[i].y = 0;
+            DHparameters[i].z = model.bindPose[i].translation.y - model.bindPose[i - 1].translation.y;
+            DHparameters[i].w = 0;
         }
     }
     ~RobotArm() {
         UnloadModel(model);
     }
     void Draw(int selection) {
-        Matrix c = model.transform;
         for (int i = 0;i < model.meshCount;i++) {
-            c = MatrixMultiply(c, relativeTransforms[i]);
             if (i == selection) {
                 model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = YELLOW;
             }
             else {
                 model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
             }
-            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], c);
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], absoluteTransforms[i]);
             rlEnableWireMode();
             model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = BLACK;
-            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], c);
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], absoluteTransforms[i]);
             rlDisableWireMode();
         }
     }
-    void MoveJoint(int selection, int direction) {  //WIP, teraz nie działa jak powinno, trzeba by to zrobić metodą DH
-        Matrix original = relativeTransforms[selection];
-        relativeTransforms[selection] = MatrixIdentity();
-        relativeTransforms[selection] = MatrixMultiply(relativeTransforms[selection], QuaternionToMatrix(QuaternionFromAxisAngle({ 1,0,0 }, direction * DEG2RAD * 5)));
-        relativeTransforms[selection] = MatrixMultiply(relativeTransforms[selection], original);
+    void MoveJoint(int selection, int direction) {
+        DHparameters[selection].x += direction * DEG2RAD * 5;
+        absoluteTransforms[0] = DHtoMatrix(DHparameters[0]);
+        for (int i = 1;i < model.meshCount;i++) {
+            absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[i - 1]);
+        }
     }
     Model model;
-    std::vector<Matrix> relativeTransforms;
+    std::vector<Matrix> absoluteTransforms;
+    std::vector<Vector4> DHparameters;
 };
 
 int main() {
@@ -99,18 +112,26 @@ int main() {
     clCamera CamInstance({ 4.0f, 2.0f, 4.0f });
     RobotArm robot("models/robot.glb");
 
-    int selection = 0;
-    const int maxSelection=robot.model.meshCount;
+    int selection = 1;
+    const int maxSelection = robot.model.meshCount - 1;
 
     while (!WindowShouldClose()) {
         UpdateCamera(&CamInstance.parameters, CAMERA_FIRST_PERSON);
         if (IsKeyPressed(KEY_PERIOD)) {
-            selection += 1;
-            selection = selection % maxSelection;
+            if (selection == maxSelection) {
+                selection = 1;
+            }
+            else {
+                selection += 1;
+            }
         }
         if (IsKeyPressed(KEY_COMMA)) {
-            selection -= 1;
-            selection = selection % maxSelection;
+            if (selection == 1) {
+                selection = maxSelection;
+            }
+            else {
+                selection -= 1;
+            }
         }
         if (IsKeyPressed(KEY_EQUAL)) {
             robot.MoveJoint(selection, 1);
@@ -120,12 +141,13 @@ int main() {
         }
         BeginDrawing();
             ClearBackground(RAYWHITE);
-
             BeginMode3D(CamInstance.parameters);
             DrawGrid(20, 1.0f);
+            DrawLine3D({ 0,0,0 }, { 500,0,0 }, RED);    //X
+            DrawLine3D({ 0,0,0 }, { 0,500,0 }, GREEN);  //Y
+            DrawLine3D({ 0,0,0 }, { 0,0,500 }, BLUE);   //Z
             robot.Draw(selection);
             EndMode3D();
-
         EndDrawing();
     }
 
