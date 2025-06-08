@@ -2,13 +2,15 @@
 
 TODO:
 -dodać sterowanie
-    -do wpisanych koordynatów
--dodać animacje przemieszczania do nowej pozycji
+    -poprzez wpisanie wartości nastawy z klawiatury -M
+        -dodać animacje przemieszczania do nowej pozycji -M
+    -do wpisanych koordynatów(kinematyka odwrotna)
 -dodać tryby uczenia i pracy
+-dodać model robota (mogący się przemieszczać w przestrzeni)
 -dodać kolizje
 -dodać interakcje z elementem otoczenia
--dodać oświetlenie 
 -GUI
+-poprawić model manipulatora
 Opcjonalnie:
 -dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
 -więcej modeli robotów(cylindryczny, polarny, itp.)
@@ -19,6 +21,11 @@ Sterowanie:
 - zmniejsz nastawę złącza
 . wybierz kolejne złącze
 , wybierz poprzednie złącze
+MMB przełącz sterowanie kamerą
+W ruch kamery w przód
+A ruch kamery w lewo
+S ruch kamery w tył
+D ruch kamery w prawo
 E ruch kamery do góry
 Q ruch kamery w dół
 
@@ -30,7 +37,6 @@ Q ruch kamery w dół
 #include <math.h>
 #include <memory>
 #include <vector>
-
 
 Matrix MatrixTranslate(Vector3 translation) {
     return MatrixTranslate(translation.x, translation.y, translation.z);
@@ -54,7 +60,6 @@ public:
         parameters.projection = CAMERA_PERSPECTIVE;
 
         SetMousePosition(GetScreenWidth() / 2, GetScreenHeight() / 2);
-        DisableCursor();
     }
 
     void Update() {
@@ -128,19 +133,90 @@ const char* fragmentShaderCode = R"(
     }
     )";
 
+enum JointType {
+    REVOLUTE,
+    PRISMATIC,
+    MANIPULATOR
+};
+
+class Device {
+public:
+    Device(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
+        model = LoadModel(fileName);
+        absoluteTransforms.resize(model.boneCount);
+        DHparameters.resize(model.boneCount);
+        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
+        DHparameters[0] = {0, 0, 0, 0};
+
+        for (int i = 1; i < model.boneCount; i++) {
+            absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
+            DHparameters[i] = { 0, model.bindPose[i].translation.x - model.bindPose[0].translation.x, model.bindPose[i].translation.y - model.bindPose[0].translation.y, 0};
+        }
+
+        for (int i = 0; i < model.materialCount; i++) {
+            model.materials[i].shader = shader;
+        }
+    }
+
+    ~Device() {
+        UnloadModel(model);
+    }
+
+    void Draw(Color clr, const Camera3D& cam, Shader& shader) {
+        Matrix view = MatrixLookAt(cam.position, cam.target, cam.up);
+        Matrix projection = MatrixPerspective(cam.fovy * DEG2RAD, (float)GetScreenWidth() / GetScreenHeight(), 0.01f, 1000.0f);
+
+        for (int i = 0; i < model.meshCount; i++) {
+            Matrix mModel = absoluteTransforms[i];
+            Matrix mvp = MatrixMultiply(MatrixMultiply(mModel, view), projection);
+
+            SetShaderValue(shader, GetShaderLocation(shader, "mvp"), &mvp, 4);
+            SetShaderValue(shader, GetShaderLocation(shader, "matModel"), &mModel, 4);
+
+            Vector3 lightDir = Vector3Normalize({-0.5f, -1.0f, -0.3f});
+            SetShaderValue(shader, GetShaderLocation(shader, "lightDir"), &lightDir, SHADER_UNIFORM_VEC3);
+
+            Vector4 baseColor = { clr.r / 255.0f, clr.g / 255.0f, clr.b / 255.0f, clr.a / 255.0f };
+            SetShaderValue(shader, GetShaderLocation(shader, "baseColor"), &baseColor, SHADER_UNIFORM_VEC4);
+
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[i]], mModel);
+        }
+    }
+
+    void MoveJoint(int direction) {
+        DHparameters[1].y -= direction * 0.05;
+        DHparameters[2].y += direction * 0.05;
+    }
+
+    void UpdateTransforms(Matrix origin) {
+        absoluteTransforms[0] = origin;
+        for (int i = 1; i < model.boneCount; i++) {
+            absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[0]);
+        }
+    }
+
+    Model model;
+    std::vector<Matrix> absoluteTransforms;
+    std::vector<Vector4> DHparameters;
+    Shader& shader;
+};
+
 class RobotArm {
 public:
     RobotArm(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);
-        absoluteTransforms.resize(model.meshCount);
-        DHparameters.resize(model.meshCount);
+        absoluteTransforms.resize(model.boneCount);
+        DHparameters.resize(model.boneCount);
+        jointTypes.resize(model.boneCount);
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
-        DHparameters[0] = {0, 0, 0, 0};
+        DHparameters[0] = { 0, 0, 0, 0 };
 
-        for (int i = 1; i < model.meshCount; i++) {
+        for (int i = 1; i < model.boneCount; i++) {
             absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
-            DHparameters[i] = {0, 0, model.bindPose[i].translation.y - model.bindPose[i - 1].translation.y, 0};
+            DHparameters[i] = { 0, 0, model.bindPose[i].translation.y - model.bindPose[i - 1].translation.y, 0 };
+            jointTypes[i] = REVOLUTE;
         }
+        jointTypes[model.boneCount - 1] = MANIPULATOR;
 
         for (int i = 0; i < model.materialCount; i++) {
             model.materials[i].shader = shader;
@@ -149,6 +225,12 @@ public:
 
     ~RobotArm() {
         UnloadModel(model);
+    }
+
+    void LoadDevice(const char* fileName) {
+        device.reset();
+        device = std::make_unique<Device>(fileName, shader);
+        device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
     }
 
     void Draw(int selection, const Camera3D& cam, Shader& shader) {
@@ -169,44 +251,69 @@ public:
             Vector4 baseColor = { clr.r / 255.0f, clr.g / 255.0f, clr.b / 255.0f, clr.a / 255.0f };
             SetShaderValue(shader, GetShaderLocation(shader, "baseColor"), &baseColor, SHADER_UNIFORM_VEC4);
 
-            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], mModel);
-
-            rlEnableWireMode();
-            model.materials[model.meshMaterial[0]].maps[MATERIAL_MAP_DIFFUSE].color = BLACK;
-            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[0]], mModel);
-            rlDisableWireMode();
+            DrawMesh(model.meshes[i], model.materials[model.meshMaterial[i]], mModel);
+        }
+        if (device) {
+            Color clr = (model.meshCount == selection) ? YELLOW : WHITE;
+            device->Draw(clr, cam, shader);
         }
     }
 
     void MoveJoint(int selection, int direction) {
-        DHparameters[selection].x += direction * DEG2RAD * 5;
-        absoluteTransforms[0] = DHtoMatrix(DHparameters[0]);
+        switch (jointTypes[selection]) {
+        case REVOLUTE:
+            DHparameters[selection].x += direction * DEG2RAD * 5;
+            break;
+        case PRISMATIC:
+            break;
+        case MANIPULATOR:
+            if (device) device->MoveJoint(direction);
+            break;
+        }
 
-        for (int i = 1; i < model.meshCount; i++) {
+        for (int i = 1; i < model.boneCount; i++) {
             absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[i - 1]);
         }
+        device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
     }
 
+    std::unique_ptr<Device> device;
     Model model;
     std::vector<Matrix> absoluteTransforms;
     std::vector<Vector4> DHparameters;
+    std::vector<JointType> jointTypes;
     Shader& shader;
 };
 
 int main() {
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(800, 800, "robot");
     SetTargetFPS(60);
 
     Shader shader = LoadShaderFromMemory(vertexShaderCode, fragmentShaderCode);
     clCamera CamInstance({4.0f, 2.0f, 4.0f});
-    RobotArm robot("models/robot.glb", shader);
+    RobotArm robot("models/robots/robot.glb", shader);
+    robot.LoadDevice("models/devices/manipulator.glb");
 
     int selection = 1;
-    const int maxSelection = robot.model.meshCount - 1;
+    const int maxSelection = robot.model.boneCount - 1;
+    bool cameraMovementEnabled = true;
+    DisableCursor();
 
     while (!WindowShouldClose()) {
-        CamInstance.Update();
-
+        if (IsMouseButtonPressed(MOUSE_MIDDLE_BUTTON)) {
+            if (cameraMovementEnabled) {
+                cameraMovementEnabled = false;
+                EnableCursor();
+            }
+            else {
+                cameraMovementEnabled = true;
+                DisableCursor();
+            }
+        }
+        if (cameraMovementEnabled) {
+            CamInstance.Update();
+        }
         if (IsKeyPressed(KEY_PERIOD)) {
             selection = (selection == maxSelection) ? 1 : selection + 1;
         }
@@ -232,7 +339,7 @@ int main() {
         EndDrawing();
     }
 
-    EnableCursor();
+    UnloadShader(shader);
     CloseWindow();
     return 0;
 }
