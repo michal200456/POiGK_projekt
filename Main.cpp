@@ -1,17 +1,15 @@
 /*
 
 TODO:
--dodać sterowanie
-    -poprzez wpisanie wartości nastawy z klawiatury -M
-        -dodać animacje przemieszczania do nowej pozycji -M
-    -do wpisanych koordynatów(kinematyka odwrotna)
--dodać tryby uczenia i pracy
+-dodać animacje przemieszczania do nowej pozycji
+-dodać tryby uczenia i pracy (to teraz będę robił -Michał)
 -dodać model robota (mogący się przemieszczać w przestrzeni)
 -dodać kolizje
 -dodać interakcje z elementem otoczenia
 -GUI
 -poprawić model manipulatora
 Opcjonalnie:
+-przemieszcanie do wpisanych koordynatów(kinematyka odwrotna)
 -dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
 -więcej modeli robotów(cylindryczny, polarny, itp.)
 -model rzeczywistego robota
@@ -19,8 +17,9 @@ Opcjonalnie:
 Sterowanie:
 = zwiększ nastawę złącza
 - zmniejsz nastawę złącza
-. wybierz kolejne złącze
-, wybierz poprzednie złącze
+PageUp wybierz kolejne złącze
+PageDown wybierz poprzednie złącze
+Enter edytuj wartość nastawy złącza
 MMB przełącz sterowanie kamerą
 W ruch kamery w przód
 A ruch kamery w lewo
@@ -37,6 +36,14 @@ Q ruch kamery w dół
 #include <math.h>
 #include <memory>
 #include <vector>
+#define RAYGUI_IMPLEMENTATION
+#include "external/raylib/raygui.h"
+
+enum JointType {
+    REVOLUTE,
+    PRISMATIC,
+    MANIPULATOR
+};
 
 Matrix MatrixTranslate(Vector3 translation) {
     return MatrixTranslate(translation.x, translation.y, translation.z);
@@ -95,6 +102,26 @@ private:
     float pitch = 0.0f;
 };
 
+class GUI {
+public:
+    bool JointPositionBoxEnabled = true;
+    bool JointPositionBoxEditMode = false;
+    float JointPositionBoxValue;
+    void Draw(JointType jt) {
+        if (JointPositionBoxEnabled) {
+            const char* text[] = { "Kąt obrotu [stopnie]:","Przesunięcie:","Rozstaw:" };
+            
+            Rectangle box = { GetScreenWidth() / 2.f, 10, 120, 24 };
+            GuiFloatBox(box, text[jt], &JointPositionBoxValue, -360, 360, JointPositionBoxEditMode);
+        }
+    }
+    void Update() {
+        if (JointPositionBoxEnabled) {
+            if (IsKeyPressed(KEY_ENTER)) JointPositionBoxEditMode = !JointPositionBoxEditMode;
+        }
+    }
+};
+
 const char* vertexShaderCode = R"(
     #version 330
     uniform mat4 mvp;
@@ -133,25 +160,20 @@ const char* fragmentShaderCode = R"(
     }
     )";
 
-enum JointType {
-    REVOLUTE,
-    PRISMATIC,
-    MANIPULATOR
-};
-
 class Device {
 public:
     Device(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);
         absoluteTransforms.resize(model.boneCount);
         DHparameters.resize(model.boneCount);
+
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
         DHparameters[0] = {0, 0, 0, 0};
-
         for (int i = 1; i < model.boneCount; i++) {
             absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
             DHparameters[i] = { 0, model.bindPose[i].translation.x - model.bindPose[0].translation.x, model.bindPose[i].translation.y - model.bindPose[0].translation.y, 0};
         }
+        offset = DHparameters[2].y + DHparameters[1].y;
 
         for (int i = 0; i < model.materialCount; i++) {
             model.materials[i].shader = shader;
@@ -183,9 +205,13 @@ public:
         }
     }
 
-    void MoveJoint(int direction) {
-        DHparameters[1].y -= direction * 0.05;
-        DHparameters[2].y += direction * 0.05;
+    void MoveJoint(float newValue) {
+        DHparameters[2].y = (offset - newValue) / 2.f;
+        DHparameters[1].y = (offset + newValue) / 2.f;
+    }
+
+    float GetPosition() {
+        return DHparameters[1].y - DHparameters[2].y;
     }
 
     void UpdateTransforms(Matrix origin) {
@@ -198,6 +224,7 @@ public:
     Model model;
     std::vector<Matrix> absoluteTransforms;
     std::vector<Vector4> DHparameters;
+    float offset;
     Shader& shader;
 };
 
@@ -259,15 +286,16 @@ public:
         }
     }
 
-    void MoveJoint(int selection, int direction) {
+    void MoveJoint(int selection, float newValue) {
         switch (jointTypes[selection]) {
         case REVOLUTE:
-            DHparameters[selection].x += direction * DEG2RAD * 5;
+            DHparameters[selection].x = newValue * DEG2RAD;
             break;
         case PRISMATIC:
+            DHparameters[selection].y = newValue;
             break;
         case MANIPULATOR:
-            if (device) device->MoveJoint(direction);
+            if (device) device->MoveJoint(newValue);
             break;
         }
 
@@ -275,6 +303,34 @@ public:
             absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[i - 1]);
         }
         device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
+    }
+
+    float GetJointPosition(int selection) {
+        switch (jointTypes[selection]) {
+        case REVOLUTE:
+            return RAD2DEG * DHparameters[selection].x;
+        case PRISMATIC:
+            return DHparameters[selection].y;
+        case MANIPULATOR:
+            if (device) return device->GetPosition();
+        }
+        return 0;
+    }
+
+    void MoveJointDiscrete(int selection, int direction) {
+        float delta;
+        switch (jointTypes[selection]) {
+        case REVOLUTE:
+            delta = 5;
+            break;
+        case PRISMATIC:
+            delta = 0.1;
+            break;
+        case MANIPULATOR:
+            delta = 0.05;
+            break;
+        }
+        MoveJoint(selection, GetJointPosition(selection) + direction * delta);
     }
 
     std::unique_ptr<Device> device;
@@ -289,6 +345,9 @@ int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(800, 800, "robot");
     SetTargetFPS(60);
+    MaximizeWindow();
+
+    GUI gui;
 
     Shader shader = LoadShaderFromMemory(vertexShaderCode, fragmentShaderCode);
     clCamera CamInstance({4.0f, 2.0f, 4.0f});
@@ -302,33 +361,34 @@ int main() {
 
     while (!WindowShouldClose()) {
         if (IsMouseButtonPressed(MOUSE_MIDDLE_BUTTON)) {
-            if (cameraMovementEnabled) {
-                cameraMovementEnabled = false;
-                EnableCursor();
-            }
-            else {
-                cameraMovementEnabled = true;
-                DisableCursor();
-            }
+            cameraMovementEnabled = !cameraMovementEnabled;
+            (cameraMovementEnabled) ? DisableCursor() : EnableCursor();
         }
         if (cameraMovementEnabled) {
             CamInstance.Update();
         }
-        if (IsKeyPressed(KEY_PERIOD)) {
+        if (IsKeyPressed(KEY_PAGE_UP)) {
             selection = (selection == maxSelection) ? 1 : selection + 1;
+            gui.JointPositionBoxEditMode = false;
         }
-        if (IsKeyPressed(KEY_COMMA)) {
+        if (IsKeyPressed(KEY_PAGE_DOWN)) {
             selection = (selection == 1) ? maxSelection : selection - 1;
+            gui.JointPositionBoxEditMode = false;
         }
-        if (IsKeyPressed(KEY_EQUAL)) {
-            robot.MoveJoint(selection, 1);
+        if (!gui.JointPositionBoxEditMode) {
+            if (IsKeyPressed(KEY_EQUAL)) {
+                robot.MoveJointDiscrete(selection, 1);
+            }
+            if (IsKeyPressed(KEY_MINUS)) {
+                 robot.MoveJointDiscrete(selection, -1);
+            }
         }
-        if (IsKeyPressed(KEY_MINUS)) {
-            robot.MoveJoint(selection, -1);
-        }
+        gui.Update();
+        gui.JointPositionBoxValue = robot.GetJointPosition(selection);
 
         BeginDrawing();
             ClearBackground(BLACK);
+        
             BeginMode3D(CamInstance.parameters);
                 DrawGrid(100, 1.0f);
                 DrawLine3D({0, 0, 0}, {100, 0, 0}, RED);    // X
@@ -336,7 +396,11 @@ int main() {
                 DrawLine3D({0, 0, 0}, {0, 0, 100}, BLUE);   // Z
                 robot.Draw(selection, CamInstance.parameters, shader);
             EndMode3D();
+
+            gui.Draw(robot.jointTypes[selection]);
         EndDrawing();
+        
+        robot.MoveJoint(selection, gui.JointPositionBoxValue);
     }
 
     UnloadShader(shader);
