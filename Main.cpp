@@ -36,6 +36,7 @@ Q ruch kamery w dół
 #include <math.h>
 #include <memory>
 #include <vector>
+#include <cstring>
 #define RAYGUI_IMPLEMENTATION
 #include "external/raylib/raygui.h"
 
@@ -100,26 +101,6 @@ public:
 private:
     float yaw = 0.0f;
     float pitch = 0.0f;
-};
-
-class GUI {
-public:
-    bool JointPositionBoxEnabled = true;
-    bool JointPositionBoxEditMode = false;
-    float JointPositionBoxValue;
-    void Draw(JointType jt) {
-        if (JointPositionBoxEnabled) {
-            const char* text[] = { "Kąt obrotu [stopnie]:","Przesunięcie:","Rozstaw:" };
-            
-            Rectangle box = { GetScreenWidth() / 2.f, 10, 120, 24 };
-            GuiFloatBox(box, text[jt], &JointPositionBoxValue, -360, 360, JointPositionBoxEditMode);
-        }
-    }
-    void Update() {
-        if (JointPositionBoxEnabled) {
-            if (IsKeyPressed(KEY_ENTER)) JointPositionBoxEditMode = !JointPositionBoxEditMode;
-        }
-    }
 };
 
 const char* vertexShaderCode = R"(
@@ -341,6 +322,96 @@ public:
     Shader& shader;
 };
 
+class SavedStates {
+public:
+    void Save(RobotArm& robot) {
+        for (int i = 1;i < jointCount + 1;i++) {
+            c.push_back(robot.GetJointPosition(i));
+        }
+        statesCount++;
+    }
+    void Delete(int selection) { //WIP
+        if (selection > statesCount) return;
+        c.erase(c.begin() + (selection - 1) * jointCount, c.begin() + selection * jointCount - 1);
+        statesCount--;
+    }
+    void GetText(char* text,int selection) {
+        if (selection > statesCount) return;
+        char buffer[10];
+        snprintf(buffer, 10, "%2d. ",selection);
+        strncpy(text, buffer, 10);
+        for (int i = 0;i < jointCount;i++) {
+            snprintf(buffer, 10, "%7f, ", c[(selection - 1) * jointCount + i]);
+            strncat(text, buffer, 10);
+        }
+        text[strnlen(text, 128) - 2] = '\0';
+    }
+    int statesCount = 0;
+    int jointCount;
+    std::vector<float> c;
+};
+
+class GUI {
+public:
+    bool teachMode = false;
+    bool workMode = false;
+
+    bool JointPositionBoxEditMode = false;
+    float JointPositionBoxValue;
+    
+    Rectangle SavedStatesPanelView = { 0, 0, 0, 0 };
+    Vector2 SavedStatesPanelOffset = { 0, 0 };
+
+    void Draw(JointType jt, SavedStates s) {
+        const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
+        Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
+        GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
+
+        if (teachMode || workMode) {
+            int y = GetScreenHeight() / 2-300;
+            Rectangle SavedStatesPanelBounds = { 24,y, 400, 600 };
+            Rectangle SavedStatesPanelContent = SavedStatesPanelBounds;
+            SavedStatesPanelContent.width -= 16;
+            SavedStatesPanelContent.height = 24 * s.statesCount;
+            GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
+            for (int i = 1;i < s.statesCount + 1;i++) {
+                char buffer[128];
+                s.GetText(buffer, i);
+                Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
+                if (textBounds.y >= SavedStatesPanelBounds.y && textBounds.y < SavedStatesPanelBounds.y + SavedStatesPanelBounds.height - 13) {
+                    GuiDrawText(buffer, textBounds, TEXT_ALIGN_LEFT, BLACK);
+                }
+            }
+        }
+    }
+    void Update() {
+        if (IsKeyPressed(KEY_ENTER)) JointPositionBoxEditMode = !JointPositionBoxEditMode;
+        if (IsKeyPressed(KEY_U)) {
+            teachMode = !teachMode;
+            if (!teachMode) {
+                workMode = false;
+            }
+        }
+        if (teachMode && IsKeyPressed(KEY_P)) {
+            workMode = !workMode;
+        }
+    }
+    GUI() {
+        const int codepointCount = 0x0FFF;
+        int codepoints[codepointCount];
+        for (int i = 0;i < codepointCount;i++) {
+            codepoints[i] = i;
+        }
+        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount);
+        GuiSetFont(font);
+        GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
+    }
+    ~GUI() {
+        UnloadFont(font);
+    }
+    Font font;
+};
+
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(800, 800, "robot");
@@ -354,6 +425,8 @@ int main() {
     RobotArm robot("models/robots/robot.glb", shader);
     robot.LoadDevice("models/devices/manipulator.glb");
 
+    SavedStates savedStates;
+    savedStates.jointCount = robot.model.boneCount - 1;
     int selection = 1;
     const int maxSelection = robot.model.boneCount - 1;
     bool cameraMovementEnabled = true;
@@ -380,7 +453,15 @@ int main() {
                 robot.MoveJointDiscrete(selection, 1);
             }
             if (IsKeyPressed(KEY_MINUS)) {
-                 robot.MoveJointDiscrete(selection, -1);
+                robot.MoveJointDiscrete(selection, -1);
+            }
+        }
+        if (gui.teachMode) {
+            if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
+                savedStates.Save(robot);
+            }
+            if (IsKeyPressed(KEY_DELETE)) {
+                savedStates.Delete(savedStates.statesCount);
             }
         }
         gui.Update();
@@ -397,7 +478,7 @@ int main() {
                 robot.Draw(selection, CamInstance.parameters, shader);
             EndMode3D();
 
-            gui.Draw(robot.jointTypes[selection]);
+            gui.Draw(robot.jointTypes[selection], savedStates);
         EndDrawing();
         
         robot.MoveJoint(selection, gui.JointPositionBoxValue);
