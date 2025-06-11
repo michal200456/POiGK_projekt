@@ -93,6 +93,7 @@ private:
     float yaw = 0.0f;
     float pitch = 0.0f;
 };
+
 // shadery symulujące oświetlenie robota z jednej strony
 const char* vertexShaderCode = R"(
     #version 330
@@ -237,6 +238,7 @@ public:
         device.reset();
         device = std::make_unique<Device>(fileName, shader);
         device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
+        targetPositions[model.boneCount - 1] = device->GetPosition();
     }
 
     void Draw(int selection, const Camera3D& cam, Shader& shader) {
@@ -369,6 +371,9 @@ public:
         }
         text[strnlen(text, 128) - 2] = '\0';
     }
+    const int delay = 60;
+    int frames;
+    int currentState = 0;
     int statesCount = 0;
     int jointCount;
     std::vector<float> c;
@@ -385,8 +390,8 @@ public:
     Rectangle SavedStatesPanelView = { 0, 0, 0, 0 };
     Vector2 SavedStatesPanelOffset = { 0, 0 };
 
-    void Draw(JointType jt, SavedStates s, int currentState) {
-        // okno zawierające informacje o położeniu (rozstawie) złącza
+    void Draw(JointType jt, SavedStates s) {
+    // okno zawierające informacje o położeniu (rozstawie) złącza
         const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
         Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
         GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
@@ -398,7 +403,7 @@ public:
             SavedStatesPanelContent.height = 24 * s.statesCount;
             GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
             for (int i = 1;i < s.statesCount + 1;i++) {
-                Color clr = (currentState == i) ? YELLOW : BLACK; // zmiana koloru
+                Color clr = (s.currentState == i) ? YELLOW : BLACK;
                 char buffer[128];
                 s.GetText(buffer, i);
                 Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
@@ -416,10 +421,12 @@ public:
                 workMode = false;
                 s.c.clear();
                 s.statesCount = 0;
+                s.frames = 0;
             }
         }
         if (teachMode && IsKeyPressed(KEY_P)) {
             workMode = !workMode;
+            if (!workMode) s.currentState = 0;
         }
     }
     GUI() {
@@ -453,7 +460,6 @@ int main() {
 
     SavedStates savedStates;
     savedStates.jointCount = robot.model.boneCount - 1;
-    int currentState = 0;
 
     int selection = 1;
     const int maxSelection = robot.model.boneCount - 1;
@@ -500,6 +506,17 @@ int main() {
         gui.JointPositionBoxValue = robot.targetPositions[selection];
         robot.UpdateJointsSmooth(0.15f);
 
+        if (gui.workMode) {
+            savedStates.frames += 1;
+            savedStates.frames %= savedStates.delay;
+            if (savedStates.frames == 0) {
+                savedStates.currentState = (savedStates.currentState == savedStates.statesCount) ? 1 : savedStates.currentState + 1;
+                for (int i = 0;i < savedStates.jointCount;i++) {
+                    robot.UpdateTargetPosition(i + 1, savedStates.c[i + savedStates.jointCount * (savedStates.currentState - 1)]);
+                }
+            }
+        }
+
         BeginDrawing();
             ClearBackground(BLACK);
         
@@ -511,7 +528,7 @@ int main() {
                 robot.Draw(selection, CamInstance.parameters, shader);
             EndMode3D();
 
-            gui.Draw(robot.jointTypes[selection], savedStates, currentState);
+            gui.Draw(robot.jointTypes[selection], savedStates);
         EndDrawing();
         
         robot.targetPositions[selection] = gui.JointPositionBoxValue;
