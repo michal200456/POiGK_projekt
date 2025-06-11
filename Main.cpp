@@ -248,6 +248,10 @@ public:
         for (int i = 0; i < model.materialCount; i++) {
             model.materials[i].shader = shader;
         }
+                targetPositions.resize(model.boneCount);
+        for (int i = 0; i < model.boneCount; i++) {
+            targetPositions[i] = GetJointPosition(i);
+}
     }
 
     ~RobotArm() {
@@ -318,20 +322,30 @@ public:
     }
 
     void MoveJointDiscrete(int selection, int direction) {
-        float delta;
-        switch (jointTypes[selection]) {
-        case REVOLUTE:
-            delta = 5;
-            break;
-        case PRISMATIC:
-            delta = 0.1;
-            break;
-        case MANIPULATOR:
-            delta = 0.05;
-            break;
-        }
-        MoveJoint(selection, GetJointPosition(selection) + direction * delta);
+    float delta;
+    switch (jointTypes[selection]) {
+    case REVOLUTE:
+        delta = 5;
+        break;
+    case PRISMATIC:
+        delta = 0.1f;
+        break;
+    case MANIPULATOR:
+        delta = 0.05f;
+        break;
     }
+    targetPositions[selection] += direction * delta;
+}
+void UpdateJointsSmooth(float lerpFactor = 0.1f) {
+    for (int i = 0; i < (int)targetPositions.size(); i++) {
+        float currentPos = GetJointPosition(i);
+        float diff = targetPositions[i] - currentPos;
+        if (fabs(diff) > 0.001f) {
+            float newPos = currentPos + diff * lerpFactor;
+            MoveJoint(i, newPos);
+        }
+    }
+}
 
     std::unique_ptr<Device> device;
     Model model;
@@ -339,6 +353,7 @@ public:
     std::vector<Vector4> DHparameters;
     std::vector<JointType> jointTypes;
     Shader& shader;
+    std::vector<float> targetPositions;
 };
 
 int main() {
@@ -375,14 +390,17 @@ int main() {
             selection = (selection == 1) ? maxSelection : selection - 1;
             gui.JointPositionBoxEditMode = false;
         }
-        if (!gui.JointPositionBoxEditMode) {
-            if (IsKeyPressed(KEY_EQUAL)) {
-                robot.MoveJointDiscrete(selection, 1);
-            }
-            if (IsKeyPressed(KEY_MINUS)) {
-                 robot.MoveJointDiscrete(selection, -1);
-            }
+            if (!gui.JointPositionBoxEditMode) {
+        if (IsKeyPressed(KEY_EQUAL)) {
+            robot.MoveJointDiscrete(selection, 1);
         }
+        if (IsKeyPressed(KEY_MINUS)) {
+            robot.MoveJointDiscrete(selection, -1);
+        }
+    }
+
+// Aktualizuj ruch złącza płynnie
+robot.UpdateJointsSmooth(0.15f);
         gui.Update();
         gui.JointPositionBoxValue = robot.GetJointPosition(selection);
 
