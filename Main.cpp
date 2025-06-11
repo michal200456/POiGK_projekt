@@ -13,6 +13,10 @@ S ruch kamery w tył
 D ruch kamery w prawo
 E ruch kamery do góry
 Q ruch kamery w dół
+U przełącz w tryb uczenia
+Ctrl+S zapisz pozycję robota
+Delete usuń ostatnią zapisaną pozycję robota
+P przełącz w tryb pracy
 
 */
 
@@ -345,14 +349,17 @@ public:
     Shader& shader;
 };
 
+//zapisane pozycje robota w trybie nauki
 class SavedStates {
 public:
+    //zapisanie pozycji robota
     void Save(RobotArm& robot) {
         for (int i = 1;i < jointCount + 1;i++) {
             c.push_back(robot.GetJointPosition(i));
         }
         statesCount++;
     }
+    //usunięcie ostatniej pozycji robota
     void Delete() {
         if (statesCount == 0) return;
         for (int i = 0;i < jointCount;i++) {
@@ -414,6 +421,7 @@ public:
         }
     }
     void Update(SavedStates& s) {
+        //sterowanie GUI
         if (IsKeyPressed(KEY_ENTER) && !workMode) JointPositionBoxEditMode = !JointPositionBoxEditMode;
         if (IsKeyPressed(KEY_U)) {
             teachMode = !teachMode;
@@ -430,12 +438,13 @@ public:
         }
     }
     GUI() {
+        //wczytywanie czcionki
         const int codepointCount = 0x0FFF;
         int codepoints[codepointCount];
         for (int i = 0;i < codepointCount;i++) {
             codepoints[i] = i;
         }
-        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount); //czcionka
+        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount);
         GuiSetFont(font);
         GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
     }
@@ -506,6 +515,7 @@ int main() {
         gui.JointPositionBoxValue = robot.targetPositions[selection];
         robot.UpdateJointsSmooth(0.15f);
 
+        //tryb pracy
         if (gui.workMode) {
             savedStates.frames += 1;
             savedStates.frames %= savedStates.delay;
