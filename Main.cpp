@@ -1,19 +1,5 @@
 /*
 
-TODO:
--dodać animacje przemieszczania do nowej pozycji
--dodać tryby uczenia i pracy (to teraz będę robił -Michał)
--dodać model robota (mogący się przemieszczać w przestrzeni)
--dodać kolizje
--dodać interakcje z elementem otoczenia
--GUI
--poprawić model manipulatora
-Opcjonalnie:
--przemieszcanie do wpisanych koordynatów(kinematyka odwrotna)
--dodać możliwość wczytywania osi obrotu/przesuwu(?) i ograniczeń ruchu z pliku
--więcej modeli robotów(cylindryczny, polarny, itp.)
--model rzeczywistego robota
-
 Sterowanie:
 = zwiększ nastawę złącza
 - zmniejsz nastawę złącza
@@ -41,6 +27,7 @@ Q ruch kamery w dół
 #include "external/raylib/raygui.h"
 
 enum JointType {
+    // rodzaj złącza
     REVOLUTE,
     PRISMATIC,
     MANIPULATOR
@@ -51,6 +38,7 @@ Matrix MatrixTranslate(Vector3 translation) {
 }
 
 Matrix DHtoMatrix(Vector4 DH) {
+    // Przekształca parametry Denavit-Hartenberga (DH) 
     Matrix result;
     Matrix RT = MatrixMultiply(MatrixRotateX(DH.x), MatrixTranslate(DH.y, 0, 0));
     Matrix TR = MatrixMultiply(MatrixTranslate(0, DH.z, 0), MatrixRotateY(DH.w));
@@ -59,6 +47,7 @@ Matrix DHtoMatrix(Vector4 DH) {
 }
 
 class clCamera {
+    // Symuluje kamerę 3D typu FPS
 public:
     clCamera(Vector3 pos) {
         parameters.position = pos;
@@ -71,6 +60,7 @@ public:
     }
 
     void Update() {
+        // aktualizuje kąt kamery przy ruszaniu myszką
         Vector2 mouseDelta = GetMouseDelta();
         yaw -= mouseDelta.x * 0.002f;
         pitch -= mouseDelta.y * 0.002f;
@@ -86,6 +76,7 @@ public:
         Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, parameters.up));
 
         float speed = 0.1f;
+        // ruch kamery w każdym kierunku
         if (IsKeyDown(KEY_W)) parameters.position = Vector3Add(parameters.position, Vector3Scale(forward, speed));
         if (IsKeyDown(KEY_S)) parameters.position = Vector3Subtract(parameters.position, Vector3Scale(forward, speed));
         if (IsKeyDown(KEY_A)) parameters.position = Vector3Subtract(parameters.position, Vector3Scale(right, speed));
@@ -102,7 +93,7 @@ private:
     float yaw = 0.0f;
     float pitch = 0.0f;
 };
-
+// shadery symulujące oświetlenie robota z jednej strony
 const char* vertexShaderCode = R"(
     #version 330
     uniform mat4 mvp;
@@ -146,8 +137,8 @@ public:
     Device(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);
         absoluteTransforms.resize(model.boneCount);
-        DHparameters.resize(model.boneCount);
-
+        DHparameters.resize(model.boneCount); 
+        // nadanie parametrów DH
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
         DHparameters[0] = {0, 0, 0, 0};
         for (int i = 1; i < model.boneCount; i++) {
@@ -166,13 +157,14 @@ public:
     }
 
     void Draw(Color clr, const Camera3D& cam, Shader& shader) {
+         // rysowanie i dodawanie światła
         Matrix view = MatrixLookAt(cam.position, cam.target, cam.up);
         Matrix projection = MatrixPerspective(cam.fovy * DEG2RAD, (float)GetScreenWidth() / GetScreenHeight(), 0.01f, 1000.0f);
 
         for (int i = 0; i < model.meshCount; i++) {
             Matrix mModel = absoluteTransforms[i];
             Matrix mvp = MatrixMultiply(MatrixMultiply(mModel, view), projection);
-
+            // shadery
             SetShaderValue(shader, GetShaderLocation(shader, "mvp"), &mvp, 4);
             SetShaderValue(shader, GetShaderLocation(shader, "matModel"), &mModel, 4);
 
@@ -187,6 +179,7 @@ public:
     }
 
     void MoveJoint(float newValue) {
+         // zmienia rozstaw chwytaka
         DHparameters[2].y = (offset - newValue) / 2.f;
         DHparameters[1].y = (offset + newValue) / 2.f;
     }
@@ -212,13 +205,13 @@ public:
 class RobotArm {
 public:
     RobotArm(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
-        model = LoadModel(fileName);
+        model = LoadModel(fileName);  // wczytywanie modelu 
         absoluteTransforms.resize(model.boneCount);
         DHparameters.resize(model.boneCount);
         jointTypes.resize(model.boneCount);
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
         DHparameters[0] = { 0, 0, 0, 0 };
-
+        // nadanie parametrów DH
         for (int i = 1; i < model.boneCount; i++) {
             absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
             DHparameters[i] = { 0, 0, model.bindPose[i].translation.y - model.bindPose[i - 1].translation.y, 0 };
@@ -247,20 +240,21 @@ public:
     }
 
     void Draw(int selection, const Camera3D& cam, Shader& shader) {
+        // rysowanie robota wraz z shaderami
         Matrix view = MatrixLookAt(cam.position, cam.target, cam.up);
         Matrix projection = MatrixPerspective(cam.fovy * DEG2RAD, (float)GetScreenWidth() / GetScreenHeight(), 0.01f, 1000.0f);
 
         for (int i = 0; i < model.meshCount; i++) {
             Matrix mModel = absoluteTransforms[i];
             Matrix mvp = MatrixMultiply(MatrixMultiply(mModel, view), projection);
-
+              // shadery
             SetShaderValue(shader, GetShaderLocation(shader, "mvp"), &mvp, 4);
             SetShaderValue(shader, GetShaderLocation(shader, "matModel"), &mModel, 4);
 
             Vector3 lightDir = Vector3Normalize({-0.5f, -1.0f, -0.3f});
             SetShaderValue(shader, GetShaderLocation(shader, "lightDir"), &lightDir, SHADER_UNIFORM_VEC3);
 
-            Color clr = (i == selection) ? YELLOW : WHITE;
+            Color clr = (i == selection) ? YELLOW : WHITE; //zaznaczenie kolorem wybranego przegubu
             Vector4 baseColor = { clr.r / 255.0f, clr.g / 255.0f, clr.b / 255.0f, clr.a / 255.0f };
             SetShaderValue(shader, GetShaderLocation(shader, "baseColor"), &baseColor, SHADER_UNIFORM_VEC4);
 
@@ -273,6 +267,7 @@ public:
     }
 
     void MoveJoint(int selection, float newValue) {
+        // aktualizacja pozycji przegubów
         switch (jointTypes[selection]) {
         case REVOLUTE:
             DHparameters[selection].x = newValue * DEG2RAD;
@@ -304,6 +299,7 @@ public:
     }
 
     void MoveJointDiscrete(int selection, int direction) {
+         // przesuwanie przegubu
         float delta;
         switch (jointTypes[selection]) {
         case REVOLUTE:
@@ -320,6 +316,7 @@ public:
     }
 
     bool UpdateJointsSmooth(float lerpFactor = 0.1f) {
+        // animacja przejścia złącza do nadanej pozycji
         bool jointMoves = false;
         for (int i = 0; i < (int)targetPositions.size(); i++) {
             float currentPos = GetJointPosition(i);
@@ -379,7 +376,7 @@ public:
 
 class GUI {
 public:
-    bool teachMode = false;
+    bool teachMode = false; 
     bool workMode = false;
 
     bool JointPositionBoxEditMode = false;
@@ -389,10 +386,11 @@ public:
     Vector2 SavedStatesPanelOffset = { 0, 0 };
 
     void Draw(JointType jt, SavedStates s, int currentState) {
+        // okno zawierające informacje o położeniu (rozstawie) złącza
         const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
         Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
         GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
-
+        // gui w trybie nauki/pracy
         if (teachMode || workMode) {
             Rectangle SavedStatesPanelBounds = { 24,GetScreenHeight() / 2.f - 300, 400, 600 };
             Rectangle SavedStatesPanelContent = SavedStatesPanelBounds;
@@ -400,7 +398,7 @@ public:
             SavedStatesPanelContent.height = 24 * s.statesCount;
             GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
             for (int i = 1;i < s.statesCount + 1;i++) {
-                Color clr = (currentState == i) ? YELLOW : BLACK;
+                Color clr = (currentState == i) ? YELLOW : BLACK; // zmiana koloru
                 char buffer[128];
                 s.GetText(buffer, i);
                 Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
@@ -430,7 +428,7 @@ public:
         for (int i = 0;i < codepointCount;i++) {
             codepoints[i] = i;
         }
-        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount);
+        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount); //czcionka
         GuiSetFont(font);
         GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
     }
@@ -442,7 +440,7 @@ public:
 
 int main() {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(800, 800, "robot");
+    InitWindow(800, 800, "robot"); //inicjalizacja okna
     SetTargetFPS(60);
     MaximizeWindow();
 
@@ -450,7 +448,7 @@ int main() {
 
     Shader shader = LoadShaderFromMemory(vertexShaderCode, fragmentShaderCode);
     clCamera CamInstance({4.0f, 2.0f, 4.0f});
-    RobotArm robot("models/robots/robot.glb", shader);
+    RobotArm robot("models/robots/robot.glb", shader); //wczytywanie modelu robota z plików glb
     robot.LoadDevice("models/devices/manipulator.glb");
 
     SavedStates savedStates;
@@ -465,13 +463,14 @@ int main() {
 
     while (!WindowShouldClose()) {
         if (IsMouseButtonPressed(MOUSE_MIDDLE_BUTTON)) {
-            cameraMovementEnabled = !cameraMovementEnabled;
+            cameraMovementEnabled = !cameraMovementEnabled; // przełączanie trybu sterowania kamerą
             (cameraMovementEnabled) ? DisableCursor() : EnableCursor();
         }
         if (cameraMovementEnabled) {
             CamInstance.Update();
         }
         if (IsKeyPressed(KEY_PAGE_UP)) {
+            // zmiana wyboru i podświetlenia złącza
             selection = (selection == maxSelection) ? 1 : selection + 1;
             gui.JointPositionBoxEditMode = false;
         }
@@ -481,6 +480,7 @@ int main() {
         }
         if (!gui.JointPositionBoxEditMode && !gui.workMode) {
             if (IsKeyPressed(KEY_EQUAL)) {
+                // ruch złączem
                 robot.MoveJointDiscrete(selection, 1);
             }
             if (IsKeyPressed(KEY_MINUS)) {
@@ -488,6 +488,7 @@ int main() {
             }
         }
         if (gui.teachMode && !gui.workMode) {
+            // tryb nauki
             if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
                 savedStates.Save(robot);
             }
@@ -503,7 +504,7 @@ int main() {
             ClearBackground(BLACK);
         
             BeginMode3D(CamInstance.parameters);
-                DrawGrid(100, 1.0f);
+                DrawGrid(100, 1.0f); // siatka i układ współrzędnych dla lepszej widoczności
                 DrawLine3D({0, 0, 0}, {100, 0, 0}, RED);    // X
                 DrawLine3D({0, 0, 0}, {0, 100, 0}, GREEN);  // Y
                 DrawLine3D({0, 0, 0}, {0, 0, 100}, BLUE);   // Z
