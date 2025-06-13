@@ -30,8 +30,10 @@ P przełącz w tryb pracy
 #define RAYGUI_IMPLEMENTATION
 #include "external/raylib/raygui.h"
 
+#define MAX_JOINT_COUNT 20
+
+// rodzaj złącza
 enum JointType {
-    // rodzaj złącza
     REVOLUTE,
     PRISMATIC,
     MANIPULATOR
@@ -41,8 +43,8 @@ Matrix MatrixTranslate(Vector3 translation) {
     return MatrixTranslate(translation.x, translation.y, translation.z);
 }
 
+// Przekształca parametry Denavit-Hartenberga (DH) 
 Matrix DHtoMatrix(Vector4 DH) {
-    // Przekształca parametry Denavit-Hartenberga (DH) 
     Matrix result;
     Matrix RT = MatrixMultiply(MatrixRotateX(DH.x), MatrixTranslate(DH.y, 0, 0));
     Matrix TR = MatrixMultiply(MatrixTranslate(0, DH.z, 0), MatrixRotateY(DH.w));
@@ -50,10 +52,15 @@ Matrix DHtoMatrix(Vector4 DH) {
     return result;
 }
 
+// Symuluje kamerę 3D typu FPS
 class clCamera {
-    // Symuluje kamerę 3D typu FPS
+    Camera3D parameters;
+    float yaw;
+    float pitch;
 public:
     clCamera(Vector3 pos) {
+        yaw = 0;
+        pitch = 0;
         parameters.position = pos;
         parameters.target = Vector3Add(pos, {0, 0, -1});
         parameters.up = {0, 1, 0};
@@ -91,11 +98,9 @@ public:
         parameters.target = Vector3Add(parameters.position, forward);
     }
 
-    Camera3D parameters;
-
-private:
-    float yaw = 0.0f;
-    float pitch = 0.0f;
+    Camera3D Get() {
+        return parameters;
+    }
 };
 
 // shadery symulujące oświetlenie robota z jednej strony
@@ -138,6 +143,11 @@ const char* fragmentShaderCode = R"(
     )";
 
 class Device {
+    Model model;
+    std::vector<Matrix> absoluteTransforms;
+    std::vector<Vector4> DHparameters;
+    float offset;
+    Shader& shader;
 public:
     Device(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);
@@ -199,21 +209,19 @@ public:
             absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[0]);
         }
     }
-
-    Model model;
-    std::vector<Matrix> absoluteTransforms;
-    std::vector<Vector4> DHparameters;
-    float offset;
-    Shader& shader;
 };
 
 class RobotArm {
+    Device* device;
+    Model model;
+    Matrix absoluteTransforms[MAX_JOINT_COUNT];
+    Vector4 DHparameters[MAX_JOINT_COUNT];
+    JointType jointTypes[MAX_JOINT_COUNT];
+    float targetPositions[MAX_JOINT_COUNT];
+    Shader& shader;
 public:
-    RobotArm(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
+    RobotArm(const char* fileName, Device& d, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);  // wczytywanie modelu 
-        absoluteTransforms.resize(model.boneCount);
-        DHparameters.resize(model.boneCount);
-        jointTypes.resize(model.boneCount);
         absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
         DHparameters[0] = { 0, 0, 0, 0 };
         // nadanie parametrów DH
@@ -223,12 +231,12 @@ public:
             jointTypes[i] = REVOLUTE;
         }
         jointTypes[model.boneCount - 1] = MANIPULATOR;
-
         for (int i = 0; i < model.materialCount; i++) {
             model.materials[i].shader = shader;
         }
-
-        targetPositions.resize(model.boneCount);
+        device = &d;
+        device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
+        targetPositions[model.boneCount - 1] = device->GetPosition();
         for (int i = 0; i < model.boneCount; i++) {
             targetPositions[i] = GetJointPosition(i);
         }
@@ -236,13 +244,6 @@ public:
 
     ~RobotArm() {
         UnloadModel(model);
-    }
-
-    void LoadDevice(const char* fileName) {
-        device.reset();
-        device = std::make_unique<Device>(fileName, shader);
-        device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
-        targetPositions[model.boneCount - 1] = device->GetPosition();
     }
 
     void Draw(int selection, const Camera3D& cam, Shader& shader) {
@@ -266,10 +267,9 @@ public:
 
             DrawMesh(model.meshes[i], model.materials[model.meshMaterial[i]], mModel);
         }
-        if (device) {
-            Color clr = (model.meshCount == selection) ? YELLOW : WHITE;
-            device->Draw(clr, cam, shader);
-        }
+        
+        Color clr = (model.meshCount == selection) ? YELLOW : WHITE;
+        device->Draw(clr, cam, shader);
     }
 
     void MoveJoint(int selection, float newValue) {
@@ -292,20 +292,8 @@ public:
         device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
     }
 
-    float GetJointPosition(int selection) {
-        switch (jointTypes[selection]) {
-        case REVOLUTE:
-            return RAD2DEG * DHparameters[selection].x;
-        case PRISMATIC:
-            return DHparameters[selection].y;
-        case MANIPULATOR:
-            if (device) return device->GetPosition();
-        }
-        return 0;
-    }
-
     void MoveJointDiscrete(int selection, int direction) {
-         // przesuwanie przegubu
+        // przesuwanie przegubu
         float delta;
         switch (jointTypes[selection]) {
         case REVOLUTE:
@@ -324,7 +312,7 @@ public:
     bool UpdateJointsSmooth(float lerpFactor = 0.1f) {
         // animacja przejścia złącza do nadanej pozycji
         bool jointMoves = false;
-        for (int i = 0; i < (int)targetPositions.size(); i++) {
+        for (int i = 0; i < model.boneCount; i++) {
             float currentPos = GetJointPosition(i);
             float diff = targetPositions[i] - currentPos;
             if (fabs(diff) > 0.001f) {
@@ -339,23 +327,53 @@ public:
     void UpdateTargetPosition(int selection, float newValue) {
         targetPositions[selection] = newValue;
     }
+    
+    float GetJointPosition(int selection) {
+        switch (jointTypes[selection]) {
+        case REVOLUTE:
+            return DHparameters[selection].x * RAD2DEG;
+        case PRISMATIC:
+            return DHparameters[selection].y;
+        case MANIPULATOR:
+            return device->GetPosition();
+        }
+        return 0;
+    }
 
-    std::unique_ptr<Device> device;
-    Model model;
-    std::vector<Matrix> absoluteTransforms;
-    std::vector<Vector4> DHparameters;
-    std::vector<JointType> jointTypes;
-    std::vector<float> targetPositions;
-    Shader& shader;
+    int GetBoneCount() {
+        return model.boneCount;
+    }
+
+    JointType GetJointType(int selection) {
+        return jointTypes[selection];
+    }
+
+    float GetTargetPosition(int selection) {
+        return targetPositions[selection];
+    }
 };
 
 //zapisane pozycje robota w trybie nauki
 class SavedStates {
+    int statesCount;
+    int jointCount;
+    std::vector<float> c;
+    RobotArm* robot;
+
+    const int delay = 60;
+    int frames;
+    int currentState;
 public:
+    SavedStates(RobotArm& r) {
+        currentState = 0;
+        statesCount = 0;
+        robot = &r;
+        jointCount = robot->GetBoneCount() - 1;
+    }
     //zapisanie pozycji robota
-    void Save(RobotArm& robot) {
+    void Save() {
         for (int i = 1;i < jointCount + 1;i++) {
-            c.push_back(robot.GetJointPosition(i));
+            c.push_back(robot->GetJointPosition(i));
         }
         statesCount++;
     }
@@ -367,76 +385,85 @@ public:
         }
         statesCount--;
     }
-    void GetText(char* text,int selection) {
+
+    void Reset() {
+        c.clear();
+        currentState = 0;
+        statesCount = 0;
+        frames = 0;
+    }
+
+    void ResetCurrentState() {
+        currentState = 0;
+    }
+    //tryb pracy
+    void WorkMode() {
+        frames += 1;
+        frames %= delay;
+        if (frames == 0) {
+            currentState = (currentState == statesCount) ? 1 : currentState + 1;
+            for (int i = 0;i < jointCount;i++) {
+                robot->UpdateTargetPosition(i + 1, GetJointParameter(currentState, i));
+            }
+        }
+    }
+
+    void GetText(char* text, int selection) {
         if (selection > statesCount) return;
         char buffer[10];
-        snprintf(buffer, 10, "%2d. ",selection);
-        strncpy(text, buffer, 10);
+        _snprintf_s(buffer, 10, "%2d. ",selection);
+        strncpy_s(text, 128 * sizeof(char), buffer, 10 * sizeof(char));
         for (int i = 0;i < jointCount;i++) {
-            snprintf(buffer, 10, "%7.3f, ", c[(selection - 1) * jointCount + i]);
-            strncat(text, buffer, 10);
+            _snprintf_s(buffer, 10, "%7.3f, ", GetJointParameter(selection, i));
+            strncat_s(text, 128 * sizeof(char), buffer, 10 * sizeof(char));
         }
-        text[strnlen(text, 128) - 2] = '\0';
+        text[strnlen_s(text, 128) - 2] = '\0';
     }
-    const int delay = 60;
-    int frames;
-    int currentState = 0;
-    int statesCount = 0;
-    int jointCount;
-    std::vector<float> c;
+
+    float GetJointParameter(int state, int joint) {
+        return c[(state - 1) * jointCount + joint];
+    }
+
+    int GetStatesCount() {
+        return statesCount;
+    }
+
+    int GetCurrentState() {
+        return currentState;
+    }
 };
 
 class GUI {
-public:
-    bool teachMode = false; 
-    bool workMode = false;
-
-    bool JointPositionBoxEditMode = false;
-    float JointPositionBoxValue;
-    
+    Font font;
     Rectangle SavedStatesPanelView = { 0, 0, 0, 0 };
     Vector2 SavedStatesPanelOffset = { 0, 0 };
-
-    void Draw(JointType jt, SavedStates s) {
+public:
+    bool JointPositionBoxEditMode = false;
+    float JointPositionBoxValue;
     // okno zawierające informacje o położeniu (rozstawie) złącza
+    void DrawJointPositionBox(JointType jt) {
         const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
         Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
         GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
-        // gui w trybie nauki/pracy
-        if (teachMode || workMode) {
-            Rectangle SavedStatesPanelBounds = { 24,GetScreenHeight() / 2.f - 300, 400, 600 };
-            Rectangle SavedStatesPanelContent = SavedStatesPanelBounds;
-            SavedStatesPanelContent.width -= 16;
-            SavedStatesPanelContent.height = 24 * s.statesCount;
-            GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
-            for (int i = 1;i < s.statesCount + 1;i++) {
-                Color clr = (s.currentState == i) ? YELLOW : BLACK;
-                char buffer[128];
-                s.GetText(buffer, i);
-                Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
-                if (textBounds.y >= SavedStatesPanelBounds.y && textBounds.y < SavedStatesPanelBounds.y + SavedStatesPanelBounds.height - 13) {
-                    GuiDrawText(buffer, textBounds, TEXT_ALIGN_LEFT, clr);
-                }
+    }
+    // gui w trybie nauki/pracy
+    void DrawSavedStatesPanel(SavedStates* savedStates) {
+        Rectangle SavedStatesPanelBounds = { 24,GetScreenHeight() / 2.f - 300, 400, 600 };
+        Rectangle SavedStatesPanelContent = SavedStatesPanelBounds;
+        SavedStatesPanelContent.width -= 16;
+        SavedStatesPanelContent.height = 24 * savedStates->GetStatesCount();
+        GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
+        for (int i = 1;i < savedStates->GetStatesCount() + 1;i++) {
+            Color clr = (savedStates->GetCurrentState() == i) ? YELLOW : BLACK;
+            char buffer[128];
+            savedStates->GetText(buffer, i);
+            Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
+            if (textBounds.y >= SavedStatesPanelBounds.y && textBounds.y < SavedStatesPanelBounds.y + SavedStatesPanelBounds.height - 13) {
+                GuiDrawText(buffer, textBounds, TEXT_ALIGN_LEFT, clr);
             }
         }
     }
-    void Update(SavedStates& s) {
-        //sterowanie GUI
-        if (IsKeyPressed(KEY_ENTER) && !workMode) JointPositionBoxEditMode = !JointPositionBoxEditMode;
-        if (IsKeyPressed(KEY_U)) {
-            teachMode = !teachMode;
-            if (!teachMode) {
-                workMode = false;
-                s.c.clear();
-                s.statesCount = 0;
-                s.frames = 0;
-            }
-        }
-        if (teachMode && IsKeyPressed(KEY_P)) {
-            workMode = !workMode;
-            if (!workMode) s.currentState = 0;
-        }
-    }
+
     GUI() {
         //wczytywanie czcionki
         const int codepointCount = 0x0FFF;
@@ -448,10 +475,10 @@ public:
         GuiSetFont(font);
         GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
     }
+
     ~GUI() {
         UnloadFont(font);
     }
-    Font font;
 };
 
 int main() {
@@ -463,15 +490,17 @@ int main() {
     GUI gui;
 
     Shader shader = LoadShaderFromMemory(vertexShaderCode, fragmentShaderCode);
-    clCamera CamInstance({4.0f, 2.0f, 4.0f});
-    RobotArm robot("models/robots/robot.glb", shader); //wczytywanie modelu robota z plików glb
-    robot.LoadDevice("models/devices/manipulator.glb");
+    clCamera CamInstance({ 4.0f, 2.0f, 4.0f });
+    Device device("models/devices/manipulator.glb", shader);
+    RobotArm robot("models/robots/robot.glb", device, shader); //wczytywanie modelu robota z plików glb
 
-    SavedStates savedStates;
-    savedStates.jointCount = robot.model.boneCount - 1;
+    SavedStates savedStates(robot);
 
     int selection = 1;
-    const int maxSelection = robot.model.boneCount - 1;
+    const int maxSelection = robot.GetBoneCount() - 1;
+    
+    bool teachMode = false;
+    bool workMode = false;
 
     bool cameraMovementEnabled = true;
     DisableCursor();
@@ -493,7 +522,7 @@ int main() {
             selection = (selection == 1) ? maxSelection : selection - 1;
             gui.JointPositionBoxEditMode = false;
         }
-        if (!gui.JointPositionBoxEditMode && !gui.workMode) {
+        if (!gui.JointPositionBoxEditMode && !workMode) {
             if (IsKeyPressed(KEY_EQUAL)) {
                 // ruch złączem
                 robot.MoveJointDiscrete(selection, 1);
@@ -502,46 +531,49 @@ int main() {
                 robot.MoveJointDiscrete(selection, -1);
             }
         }
-        if (gui.teachMode && !gui.workMode) {
+        if (teachMode && !workMode) {
             // tryb nauki
             if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S)) {
-                savedStates.Save(robot);
+                savedStates.Save();
             }
             if (IsKeyPressed(KEY_DELETE)) {
                 savedStates.Delete();
             }
         }
-        gui.Update(savedStates);
-        gui.JointPositionBoxValue = robot.targetPositions[selection];
-        robot.UpdateJointsSmooth(0.15f);
-
-        //tryb pracy
-        if (gui.workMode) {
-            savedStates.frames += 1;
-            savedStates.frames %= savedStates.delay;
-            if (savedStates.frames == 0) {
-                savedStates.currentState = (savedStates.currentState == savedStates.statesCount) ? 1 : savedStates.currentState + 1;
-                for (int i = 0;i < savedStates.jointCount;i++) {
-                    robot.UpdateTargetPosition(i + 1, savedStates.c[i + savedStates.jointCount * (savedStates.currentState - 1)]);
-                }
+        if (IsKeyPressed(KEY_ENTER) && !workMode) gui.JointPositionBoxEditMode = !gui.JointPositionBoxEditMode;
+        if (IsKeyPressed(KEY_U)) {
+            teachMode = !teachMode;
+            if (!teachMode) {
+                workMode = false;
+                savedStates.Reset();
             }
         }
+        if (teachMode && IsKeyPressed(KEY_P)) {
+            workMode = !workMode;
+            if (!workMode) savedStates.ResetCurrentState();
+        }
+
+        gui.JointPositionBoxValue = robot.GetTargetPosition(selection);
+        robot.UpdateJointsSmooth(0.15f);
+
+        if (workMode) savedStates.WorkMode();
 
         BeginDrawing();
             ClearBackground(BLACK);
         
-            BeginMode3D(CamInstance.parameters);
+            BeginMode3D(CamInstance.Get());
                 DrawGrid(100, 1.0f); // siatka i układ współrzędnych dla lepszej widoczności
                 DrawLine3D({0, 0, 0}, {100, 0, 0}, RED);    // X
                 DrawLine3D({0, 0, 0}, {0, 100, 0}, GREEN);  // Y
                 DrawLine3D({0, 0, 0}, {0, 0, 100}, BLUE);   // Z
-                robot.Draw(selection, CamInstance.parameters, shader);
+                robot.Draw(selection, CamInstance.Get(), shader);
             EndMode3D();
 
-            gui.Draw(robot.jointTypes[selection], savedStates);
-        EndDrawing();
+            gui.DrawJointPositionBox(robot.GetJointType(selection));
+            if (teachMode || workMode) gui.DrawSavedStatesPanel(&savedStates);
+            EndDrawing();
         
-        robot.targetPositions[selection] = gui.JointPositionBoxValue;
+        robot.UpdateTargetPosition(selection, gui.JointPositionBoxValue);
     }
 
     UnloadShader(shader);
