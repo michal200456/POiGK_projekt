@@ -455,30 +455,79 @@ class GUI {
 public:
     bool JointPositionBoxEditMode = false;
     float JointPositionBoxValue;
+    bool showHelp = false;
     // okno zawierające informacje o położeniu (rozstawie) złącza
     void DrawJointPositionBox(JointType jt) {
         const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
         Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
         GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
     }
-    // gui w trybie nauki/pracy
-    void DrawSavedStatesPanel(SavedStates* savedStates) {
-        Rectangle SavedStatesPanelBounds = { 24,GetScreenHeight() / 2.f - 300, 400, 600 };
-        Rectangle SavedStatesPanelContent = SavedStatesPanelBounds;
-        SavedStatesPanelContent.width -= 16;
-        SavedStatesPanelContent.height = 24 * savedStates->GetStatesCount();
-        GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
-        for (int i = 1;i < savedStates->GetStatesCount() + 1;i++) {
-            Color clr = (savedStates->GetCurrentState() == i) ? YELLOW : BLACK;
-            char buffer[128];
-            savedStates->GetText(buffer, i);
-            Rectangle textBounds = { SavedStatesPanelContent.x, SavedStatesPanelOffset.y + SavedStatesPanelContent.y + 24 * (i - 1), SavedStatesPanelContent.width, 24 };
-            if (textBounds.y >= SavedStatesPanelBounds.y && textBounds.y < SavedStatesPanelBounds.y + SavedStatesPanelBounds.height - 13) {
-                GuiDrawText(buffer, textBounds, TEXT_ALIGN_LEFT, clr);
-            }
+  // gui w trybie nauki/pracy
+void DrawSavedStatesPanel(SavedStates* savedStates) {
+    const float itemHeight = 24.0f;
+    const float headerHeight = 30.0f;
+    const float keyHelpFontSize = 16.0f;
+    const int keyHelpLines = 3;
+    const float keyHelpLineSpacing = keyHelpFontSize + 16.0f;
+    const float keyHelpHeight = keyHelpLines * keyHelpLineSpacing;
+
+    const float maxHeight = GetScreenHeight() - 100.0f;
+    int statesCount = savedStates->GetStatesCount();
+
+    float requiredContentHeight = headerHeight + keyHelpHeight + itemHeight * statesCount;
+    float panelHeight = requiredContentHeight;
+    if (panelHeight > maxHeight) panelHeight = maxHeight;
+
+    Rectangle SavedStatesPanelBounds = { 24, 50, 330, panelHeight };
+    Rectangle SavedStatesPanelContent = {
+        SavedStatesPanelBounds.x,
+        SavedStatesPanelBounds.y,
+        SavedStatesPanelBounds.width - 16,
+        requiredContentHeight
+    };
+
+    GuiScrollPanel(SavedStatesPanelBounds, NULL, SavedStatesPanelContent, &SavedStatesPanelOffset, &SavedStatesPanelView);
+
+    // Nagłówek
+    Rectangle headerRect = {
+        SavedStatesPanelContent.x,
+        SavedStatesPanelOffset.y + SavedStatesPanelContent.y,
+        SavedStatesPanelContent.width,
+        headerHeight
+    };
+    GuiDrawText("Zapisane stany", headerRect, TEXT_ALIGN_CENTER, DARKGRAY);
+
+    // Sekcja pomocy (klawisze)
+    const char* keys[] = { "Ctrl+S", "P", "U" };
+    const char* descriptions[] = { "Zapisz pozycje robota", "Wlacz tryb pracy", "Wyjscie" };
+    int keyHelpX = (int)(SavedStatesPanelBounds.x + 10);
+    int keyHelpY = (int)(SavedStatesPanelBounds.y + headerHeight + 6);
+    DrawKeyHelpList(keys, descriptions, 3, keyHelpX, keyHelpY, (int)keyHelpFontSize, 100);
+
+    // Lista zapisanych stanów 
+    for (int i = 1; i <= statesCount; i++) {
+        Color clr = (savedStates->GetCurrentState() == i) ? YELLOW : BLACK;
+        char buffer[128];
+        savedStates->GetText(buffer, i); // ← tu nic nie zmieniamy, tylko wyświetlamy
+
+        Rectangle textBounds = {
+            SavedStatesPanelContent.x,
+            SavedStatesPanelOffset.y + SavedStatesPanelContent.y + headerHeight + keyHelpHeight + itemHeight * (i - 1),
+            SavedStatesPanelContent.width,
+            itemHeight
+        };
+
+        if (textBounds.y >= SavedStatesPanelBounds.y &&
+            textBounds.y < SavedStatesPanelBounds.y + SavedStatesPanelBounds.height - 13) {
+            GuiDrawText(buffer, textBounds, TEXT_ALIGN_LEFT, clr);
         }
     }
+}
 
+ 
+ 
+ 
+ 
     GUI() {
         //wczytywanie czcionki
         const int codepointCount = 0x0FFF;
@@ -490,10 +539,93 @@ public:
         GuiSetFont(font);
         GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
     }
-
+ 
     ~GUI() {
         UnloadFont(font);
     }
+   void DrawKeyHelpEntry(const char* key, const char* description, int x, int y, int fontSize, int keyColWidth) {
+    int padding = 6;
+    int keyTextWidth = MeasureText(key, fontSize);
+    int boxWidth = keyTextWidth + padding*2;
+    int boxHeight = fontSize + padding * 2;
+ 
+    int offsetX = x + (keyColWidth - boxWidth);
+ 
+    DrawRectangle(offsetX, y, boxWidth, boxHeight, DARKGRAY);
+    DrawRectangleLines(offsetX, y, boxWidth, boxHeight, LIGHTGRAY);
+    DrawText(key, offsetX + padding, y + padding, fontSize, RAYWHITE);
+ 
+    DrawText(description, x + keyColWidth + 16, y + padding, fontSize, DARKGRAY);
+}
+ 
+// uniwersalna funkcja do rysowania listy skrótów klawiszowych
+void DrawKeyHelpList(const char** keys, const char** descriptions, int count, int x, int y, int fontSize, int keyColWidth) {
+    int lineSpacing = fontSize + 16;
+ 
+    for (int i = 0; i < count; i++) {
+        if (strlen(keys[i]) == 0) {
+            DrawText(descriptions[i], x, y + i * lineSpacing, fontSize, BLACK);
+        } else {
+            DrawKeyHelpEntry(keys[i], descriptions[i], x, y + i * lineSpacing, fontSize, keyColWidth);
+        }
+    }
+}
+ 
+void DrawHelpPanel() {
+    if (!showHelp) return;
+ 
+    const char* keys[] = {
+        "",         // nagłówek
+        "=", "-", "PageUp", "PageDown", "Enter", "MMB",
+        "W", "A", "S", "D", "E", "Q", "U", "Ctrl+S", "Delete", "P"
+    };
+ 
+    const char* descriptions[] = {
+        "Sterowanie:",
+        "zwieksz nastawe zlacza",
+        "zmniejsz nastawe zlacza",
+        "wybierz kolejne zlacze",
+        "wybierz poprzednie zlacze",
+        "edytuj wartosc nastawy zlacza",
+        "przelacz sterowanie kamera",
+        "ruch kamery w przod",
+        "ruch kamery w lewo",
+        "ruch kamery w tyl",
+        "ruch kamery w prawo",
+        "ruch kamery do gory",
+        "ruch kamery w dol",
+        "przelacz w tryb uczenia",
+        "zapisz pozycje robota",
+        "usun ostatnia zapisana pozycje robota",
+        "przelacz w tryb pracy"
+    };
+ 
+    Rectangle bounds;
+    bounds.x = GetScreenWidth() / 2.0f - 350;
+    bounds.y = GetScreenHeight() / 2.0f - 300;
+    bounds.width = 700;
+    bounds.height = 700;
+ 
+    DrawRectangleRec(bounds, LIGHTGRAY);
+    GuiPanel(bounds, "POMOC (H aby zamknąć)");
+ 
+    int fontSize = 20;
+    int baseX = (int)(bounds.x + 30);
+    int baseY = (int)(bounds.y + 50);
+    int keyColWidth = 120;
+ 
+    int lineCount = sizeof(descriptions) / sizeof(descriptions[0]);
+    DrawKeyHelpList(keys, descriptions, lineCount, baseX, baseY, fontSize, keyColWidth);
+}
+ 
+ 
+ 
+    void ToggleHelp() {
+        showHelp = !showHelp;
+}
+ 
+ 
+ 
 };
 
 int main() {
@@ -516,6 +648,8 @@ int main() {
     
     bool teachMode = false;
     bool workMode = false;
+    const char*H []= {"H"};
+    const char*Pomoc []= {"Pomoc"};
 
     bool cameraMovementEnabled = true;
     DisableCursor();
@@ -545,6 +679,10 @@ int main() {
             if (IsKeyPressed(KEY_MINUS)) {
                 robot.MoveJointDiscrete(selection, -1);
             }
+            if (IsKeyPressed(KEY_H)) {
+                gui.ToggleHelp();
+            }
+ 
         }
         if (teachMode && !workMode) {
             // tryb nauki
@@ -583,7 +721,8 @@ int main() {
                 DrawLine3D({0, 0, 0}, {0, 0, 100}, BLUE);   // Z
                 robot.Draw(selection, CamInstance.Get(), shader);
             EndMode3D();
-
+            gui.DrawHelpPanel();
+            gui.DrawKeyHelpList(H, Pomoc, 1, -20, 10, 16, 100);
             gui.DrawJointPositionBox(robot.GetJointType(selection));
             if (teachMode || workMode) gui.DrawSavedStatesPanel(&savedStates);
             EndDrawing();
