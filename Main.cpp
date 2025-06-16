@@ -46,8 +46,8 @@ Matrix MatrixTranslate(Vector3 translation) {
 // Przekształca parametry Denavit-Hartenberga (DH) 
 Matrix DHtoMatrix(Vector4 DH) {
     Matrix result;
-    Matrix RT = MatrixMultiply(MatrixRotateX(DH.x), MatrixTranslate(DH.y, 0, 0));
-    Matrix TR = MatrixMultiply(MatrixTranslate(0, DH.z, 0), MatrixRotateY(DH.w));
+    Matrix RT = MatrixMultiply(MatrixRotateY(DH.x), MatrixTranslate(0, DH.y, 0));
+    Matrix TR = MatrixMultiply(MatrixTranslate(DH.z, 0, 0), MatrixRotateX(DH.w));
     result = MatrixMultiply(RT, TR);
     return result;
 }
@@ -199,15 +199,15 @@ public:
         DHparameters[1].y = (offset + newValue) / 2.f;
     }
 
-    float GetPosition() {
-        return DHparameters[1].y - DHparameters[2].y;
-    }
-
     void UpdateTransforms(Matrix origin) {
         absoluteTransforms[0] = origin;
         for (int i = 1; i < model.boneCount; i++) {
             absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[0]);
         }
+    }
+
+    float GetPosition() {
+        return DHparameters[1].y - DHparameters[2].y;
     }
 };
 
@@ -221,29 +221,44 @@ class RobotArm {
     Shader& shader;
 public:
     RobotArm(const char* fileName, Device& d, Shader& shaderRef) : shader(shaderRef) {
-        model = LoadModel(fileName);  // wczytywanie modelu 
-        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
-        DHparameters[0] = { 0, 0, 0, 0 };
-        // nadanie parametrów DH
-        for (int i = 1; i < model.boneCount; i++) {
-            absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
-            DHparameters[i] = { 0, 0, model.bindPose[i].translation.y - model.bindPose[i - 1].translation.y, 0 };
-            jointTypes[i] = REVOLUTE;
-        }
-        jointTypes[model.boneCount - 1] = MANIPULATOR;
-        for (int i = 0; i < model.materialCount; i++) {
-            model.materials[i].shader = shader;
-        }
+        LoadRobotModel(fileName);
+
         device = &d;
         device->UpdateTransforms(absoluteTransforms[model.boneCount - 1]);
-        targetPositions[model.boneCount - 1] = device->GetPosition();
-        for (int i = 0; i < model.boneCount; i++) {
-            targetPositions[i] = GetJointPosition(i);
-        }
+        targetPositions[model.boneCount - 1] = GetJointPosition(model.boneCount - 1);
     }
 
     ~RobotArm() {
         UnloadModel(model);
+    }
+
+    void LoadRobotModel(const char* fileName) {
+        model = LoadModel(fileName);  // wczytywanie modelu 
+        
+        for (int i = 1; i < model.boneCount; i++) {
+            absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
+            jointTypes[i] = REVOLUTE;
+        }
+        jointTypes[model.boneCount - 1] = MANIPULATOR;
+        // nadanie parametrów DH
+        DHparameters[0] = { 0, 0, 0, 0 };
+        DHparameters[1] = { 0,model.bindPose[1].translation.y - model.bindPose[0].translation.y,0,0 };
+        DHparameters[2] = { 0, 0,0 , 90 * DEG2RAD };
+        DHparameters[3] = { 0, 0, model.bindPose[3].translation.y - model.bindPose[2].translation.y, 0 };
+        DHparameters[4] = { 0, model.bindPose[4].translation.x - model.bindPose[3].translation.x, model.bindPose[4].translation.y - model.bindPose[3].translation.y, 0 };
+
+        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
+        for (int i = 1; i < model.boneCount; i++) {
+            absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[i - 1]);
+        }
+
+        for (int i = 0; i < model.materialCount; i++) {
+            model.materials[i].shader = shader;
+        }
+
+        for (int i = 0; i < model.boneCount - 1; i++) {
+            targetPositions[i] = GetJointPosition(i);
+        }
     }
 
     void Draw(int selection, const Camera3D& cam, Shader& shader) {
@@ -294,7 +309,7 @@ public:
 
     void MoveJointDiscrete(int selection, int direction) {
         // przesuwanie przegubu
-        float delta;
+        float delta = 0;
         switch (jointTypes[selection]) {
         case REVOLUTE:
             delta = 5;
@@ -327,7 +342,7 @@ public:
     void UpdateTargetPosition(int selection, float newValue) {
         targetPositions[selection] = newValue;
     }
-    
+
     float GetJointPosition(int selection) {
         switch (jointTypes[selection]) {
         case REVOLUTE:
@@ -492,7 +507,7 @@ int main() {
     Shader shader = LoadShaderFromMemory(vertexShaderCode, fragmentShaderCode);
     clCamera CamInstance({ 4.0f, 2.0f, 4.0f });
     Device device("models/devices/manipulator.glb", shader);
-    RobotArm robot("models/robots/robot.glb", device, shader); //wczytywanie modelu robota z plików glb
+    RobotArm robot("models/robots/puma.glb", device, shader); //wczytywanie modelu robota z plików glb
 
     SavedStates savedStates(robot);
 
