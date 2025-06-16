@@ -144,23 +144,24 @@ const char* fragmentShaderCode = R"(
 
 class Device {
     Model model;
-    std::vector<Matrix> absoluteTransforms;
-    std::vector<Vector4> DHparameters;
+    Matrix absoluteTransforms[MAX_JOINT_COUNT];
+    Vector4 DHparameters[MAX_JOINT_COUNT];
     float offset;
     Shader& shader;
 public:
     Device(const char* fileName, Shader& shaderRef) : shader(shaderRef) {
         model = LoadModel(fileName);
-        absoluteTransforms.resize(model.boneCount);
-        DHparameters.resize(model.boneCount); 
         // nadanie parametrów DH
-        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
         DHparameters[0] = {0, 0, 0, 0};
         for (int i = 1; i < model.boneCount; i++) {
-            absoluteTransforms[i] = MatrixTranslate(model.bindPose[i].translation);
-            DHparameters[i] = { 0, model.bindPose[i].translation.x - model.bindPose[0].translation.x, model.bindPose[i].translation.y - model.bindPose[0].translation.y, 0};
+            DHparameters[i] = { 0, model.bindPose[i].translation.y - model.bindPose[0].translation.y, model.bindPose[i].translation.x - model.bindPose[0].translation.x, 0};
         }
         offset = DHparameters[2].y + DHparameters[1].y;
+
+        absoluteTransforms[0] = MatrixTranslate(model.bindPose[0].translation);
+        for (int i = 1; i < model.boneCount; i++) {
+            absoluteTransforms[i] = MatrixMultiply(DHtoMatrix(DHparameters[i]), absoluteTransforms[i - 1]);
+        }
 
         for (int i = 0; i < model.materialCount; i++) {
             model.materials[i].shader = shader;
@@ -195,8 +196,8 @@ public:
 
     void MoveJoint(float newValue) {
          // zmienia rozstaw chwytaka
-        DHparameters[2].y = (offset - newValue) / 2.f;
-        DHparameters[1].y = (offset + newValue) / 2.f;
+        DHparameters[1].y = (offset - newValue) / 2.f;
+        DHparameters[2].y = (offset + newValue) / 2.f;
     }
 
     void UpdateTransforms(Matrix origin) {
@@ -207,7 +208,11 @@ public:
     }
 
     float GetPosition() {
-        return DHparameters[1].y - DHparameters[2].y;
+        return DHparameters[2].y - DHparameters[1].y;
+    }
+
+    int GetBoneCount() {
+        return model.boneCount;
     }
 };
 
