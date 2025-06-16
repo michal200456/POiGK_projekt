@@ -461,11 +461,27 @@ public:
     bool JointPositionBoxEditMode = false;
     float JointPositionBoxValue;
     bool showHelp = false;
+    GUI() {
+        //wczytywanie czcionki
+        const int codepointCount = 0x0FFF;
+        int codepoints[codepointCount];
+        for (int i = 0; i < codepointCount; i++) {
+            codepoints[i] = i;
+        }
+        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount);
+        GuiSetFont(font);
+        GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
+    }
+    ~GUI() {
+        UnloadFont(font);
+    }
     // okno zawierające informacje o położeniu (rozstawie) złącza
     void DrawJointPositionBox(JointType jt) {
         const char* text[] = { "Kąt obrotu [°]:","Przesunięcie:","Rozstaw:" };
         Rectangle JointPositionBoxBounds = { GetScreenWidth() / 2.f, 10, 120, 24 };
-        GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, -170, 170, JointPositionBoxEditMode);
+        int minValue = (jt == REVOLUTE) ? -170 : 0;
+        int maxValue = (jt == REVOLUTE) ? 170 : 2;
+        GuiFloatBox(JointPositionBoxBounds, text[jt], &JointPositionBoxValue, minValue, maxValue, JointPositionBoxEditMode);
     }
   // gui w trybie nauki/pracy
 void DrawSavedStatesPanel(SavedStates* savedStates) {
@@ -528,26 +544,7 @@ void DrawSavedStatesPanel(SavedStates* savedStates) {
         }
     }
 }
-
- 
- 
- 
- 
-    GUI() {
-        //wczytywanie czcionki
-        const int codepointCount = 0x0FFF;
-        int codepoints[codepointCount];
-        for (int i = 0;i < codepointCount;i++) {
-            codepoints[i] = i;
-        }
-        font = LoadFontEx("Roboto_Condensed-Bold.ttf", 24, codepoints, codepointCount);
-        GuiSetFont(font);
-        GuiSetStyle(DEFAULT, TEXT_SIZE, 24);
-    }
- 
-    ~GUI() {
-        UnloadFont(font);
-    }
+    
    void DrawKeyHelpEntry(const char* key, const char* description, int x, int y, int fontSize, int keyColWidth) {
     int padding = 6;
     int keyTextWidth = MeasureText(key, fontSize);
